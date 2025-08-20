@@ -2,6 +2,8 @@ import yaml
 import os
 import re
 import httpx
+import time
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -46,8 +48,12 @@ def load_basket() -> list[str]:
                 continue
             seen.add(pair_upper)
             
-            # 格式校验：BASE/QUOTE
+            # 格式校验：BASE/QUOTE 或 BASE/QUOTE:SETTLE（期货）
             if re.match(r'^[A-Z0-9]+/[A-Z0-9]+$', pair_upper):
+                # 现货格式，自动转换为期货格式
+                validated_basket.append(f"{pair_upper}:USDT")
+            elif re.match(r'^[A-Z0-9]+/[A-Z0-9]+:[A-Z0-9]+$', pair_upper):
+                # 期货格式，直接使用
                 validated_basket.append(pair_upper)
             else:
                 print(f"警告：跳过无效格式的交易对 {pair}")
@@ -66,7 +72,7 @@ class FTClient:
         self.base_url = base_url.rstrip('/')
         self.session = httpx.Client(
             auth=(user, passwd),
-            timeout=30.0
+            timeout=60.0  # 增加超时时间到60秒
         )
     
     def _request(self, method: str, path: str, json: Optional[Dict[Any, Any]] = None) -> Optional[Dict[Any, Any]]:
@@ -129,7 +135,21 @@ class FTClient:
             "pair": pair,
             "side": "long"
         }
-        return self._request("POST", "/api/v1/forceenter", json=data)
+        result = self._request("POST", "/api/v1/forceenter", json=data)
+        
+        # 如果请求超时但实际可能成功，尝试检查是否真的成功了
+        if result is None:
+            # 等待一下再检查持仓
+            import time
+            time.sleep(2)
+            # 检查是否已经有这个交易对的持仓
+            positions = self.list_positions()
+            for pos in positions:
+                if isinstance(pos, dict) and pos.get('pair') == pair and not pos.get('is_short', False):
+                    # 找到了对应的多仓，说明实际成功了
+                    return {"status": "success", "message": "Position found after timeout"}
+        
+        return result
     
     def forcesell(self, pair: str) -> Optional[Dict[Any, Any]]:
         """强制平多仓"""
@@ -514,8 +534,12 @@ async def basket_set_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # 转换为大写
             pair_upper = pair.upper()
             
-            # 格式校验：BASE/QUOTE
+            # 格式校验：BASE/QUOTE 或 BASE/QUOTE:SETTLE（期货）
             if re.match(r'^[A-Z0-9]+/[A-Z0-9]+$', pair_upper):
+                # 现货格式，自动转换为期货格式
+                validated_pairs.append(f"{pair_upper}:USDT")
+            elif re.match(r'^[A-Z0-9]+/[A-Z0-9]+:[A-Z0-9]+$', pair_upper):
+                # 期货格式，直接使用
                 validated_pairs.append(pair_upper)
             else:
                 invalid_pairs.append(pair)
@@ -621,6 +645,164 @@ async def stake_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await update.message.reply_text(f"❌ 设置每笔名义失败: {str(e)}")
+
+# 全局变量用于幂等控制
+executed_operations = set()  # 记录已执行的操作ID
+
+async def go_long_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /go_long 命令"""
+    # 检查是否在目标群组和 Topic
+    if update.message.chat.id != config['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != config['telegram']['topic_id']:
+        return
+    
+    # 检查权限
+    has_permission, error_msg = check_permission(update.message.from_user.id)
+    if not has_permission:
+        await update.message.reply_text(error_msg)
+        return
+    
+    try:
+        # 加载配置和篮子
+        cfg = load_config()
+        basket = load_basket()
+        
+        if not basket:
+            await update.message.reply_text("❌ 篮子为空，无法执行开多操作")
+            return
+        
+        # 生成操作ID（时间戳+随机数）
+        import random
+        op_id = f"long_{int(time.time())}_{random.randint(1000, 9999)}"
+        
+        # 构建确认消息
+        message = f"🚀 **开多确认** (ID: {op_id})\n\n"
+        message += "📊 **操作详情**:\n"
+        message += f"  • 交易对数量: {len(basket)} 个\n"
+        message += f"  • 每笔名义: {cfg['defaults']['stake']} USDT\n"
+        message += f"  • 延迟间隔: {cfg['defaults']['delay_ms']} ms\n"
+        message += f"  • 总金额: {len(basket) * cfg['defaults']['stake']} USDT\n\n"
+        
+        message += "🛒 **交易对列表**:\n"
+        for i, pair in enumerate(basket, 1):
+            message += f"  {i}. `{pair}`\n"
+        
+        message += "\n⚠️ **确认后将执行开多操作**"
+        
+        # 创建内联键盘
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 确认开多", callback_data=f"CONFIRM|GO_LONG|{op_id}"),
+                InlineKeyboardButton("❌ 取消", callback_data=f"CANCEL|GO_LONG|{op_id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ 创建开多确认失败: {str(e)}")
+
+async def flat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /flat 命令"""
+    # 检查是否在目标群组和 Topic
+    if update.message.chat.id != config['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != config['telegram']['topic_id']:
+        return
+    
+    # 检查权限
+    has_permission, error_msg = check_permission(update.message.from_user.id)
+    if not has_permission:
+        await update.message.reply_text(error_msg)
+        return
+    
+    try:
+        # 生成操作ID
+        import random
+        op_id = f"flat_{int(time.time())}_{random.randint(1000, 9999)}"
+        
+        # 构建确认消息
+        message = f"🚫 **全平确认** (ID: {op_id})\n\n"
+        message += "📊 **操作详情**:\n"
+        message += "  • 取消所有开放订单\n"
+        message += "  • 平掉所有多仓持仓\n"
+        message += "  • 平掉所有空仓持仓\n\n"
+        message += "⚠️ **警告: 此操作将清空所有持仓**\n"
+        message += "⚠️ **确认后将执行全平操作**"
+        
+        # 创建内联键盘
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 确认全平", callback_data=f"CONFIRM|FLAT|{op_id}"),
+                InlineKeyboardButton("❌ 取消", callback_data=f"CANCEL|FLAT|{op_id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ 创建全平确认失败: {str(e)}")
+
+async def go_short_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /go_short 命令"""
+    # 检查是否在目标群组和 Topic
+    if update.message.chat.id != config['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != config['telegram']['topic_id']:
+        return
+    
+    # 检查权限
+    has_permission, error_msg = check_permission(update.message.from_user.id)
+    if not has_permission:
+        await update.message.reply_text(error_msg)
+        return
+    
+    try:
+        # 加载配置和篮子
+        cfg = load_config()
+        basket = load_basket()
+        
+        if not basket:
+            await update.message.reply_text("❌ 篮子为空，无法执行开空操作")
+            return
+        
+        # 生成操作ID
+        import random
+        op_id = f"short_{int(time.time())}_{random.randint(1000, 9999)}"
+        
+        # 构建确认消息
+        message = f"🔴 **开空确认** (ID: {op_id})\n\n"
+        message += "📊 **操作详情**:\n"
+        message += "  • 第一步: 平掉所有多仓持仓\n"
+        message += "  • 第二步: 逐个开空仓\n"
+        message += f"  • 交易对数量: {len(basket)} 个\n"
+        message += f"  • 每笔名义: {cfg['defaults']['stake']} USDT\n"
+        message += f"  • 延迟间隔: {cfg['defaults']['delay_ms']} ms\n"
+        message += f"  • 轮询超时: {cfg['defaults']['poll_timeout_sec']} 秒\n"
+        message += f"  • 总金额: {len(basket) * cfg['defaults']['stake']} USDT\n\n"
+        
+        message += "🛒 **交易对列表**:\n"
+        for i, pair in enumerate(basket, 1):
+            message += f"  {i}. `{pair}`\n"
+        
+        message += "\n⚠️ **确认后将执行反向操作（先平多后开空）**"
+        
+        # 创建内联键盘
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 确认开空", callback_data=f"CONFIRM|GO_SHORT|{op_id}"),
+                InlineKeyboardButton("❌ 取消", callback_data=f"CANCEL|GO_SHORT|{op_id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ 创建开空确认失败: {str(e)}")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理内联键盘按钮回调"""
@@ -760,8 +942,423 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     raise e
             
+        # 处理交易命令回调
+        elif query.data.startswith("CONFIRM|") or query.data.startswith("CANCEL|"):
+            # 解析回调数据
+            parts = query.data.split("|")
+            if len(parts) != 3:
+                await query.answer("❌ 无效的回调数据", show_alert=True)
+                return
+            
+            action, operation, op_id = parts
+            
+            # 检查权限
+            has_permission, error_msg = check_permission(query.from_user.id)
+            if not has_permission:
+                await query.answer(error_msg, show_alert=True)
+                return
+            
+            # 检查幂等性
+            if action == "CONFIRM" and op_id in executed_operations:
+                await query.answer("⚠️ 此操作已执行，请勿重复点击", show_alert=True)
+                return
+            
+            if action == "CANCEL":
+                await query.answer("❌ 操作已取消", show_alert=False)
+                await query.edit_message_text("❌ **操作已取消**", parse_mode='Markdown')
+                return
+            
+            # 执行确认操作
+            if action == "CONFIRM":
+                if operation == "GO_LONG":
+                    # 记录操作ID，防止重复执行
+                    executed_operations.add(op_id)
+                    
+                    # 开始执行开多操作
+                    await execute_go_long(query, op_id)
+                elif operation == "FLAT":
+                    # 记录操作ID，防止重复执行
+                    executed_operations.add(op_id)
+                    
+                    # 开始执行全平操作
+                    await execute_flat(query, op_id)
+                elif operation == "GO_SHORT":
+                    # 记录操作ID，防止重复执行
+                    executed_operations.add(op_id)
+                    
+                    # 开始执行开空操作
+                    await execute_go_short(query, op_id)
+            
     except Exception as e:
-        await query.edit_message_text(f"❌ 刷新失败: {str(e)}")
+        await query.edit_message_text(f"❌ 操作失败: {str(e)}")
+
+async def execute_go_long(query, op_id: str):
+    """执行开多操作"""
+    try:
+        # 加载配置和篮子
+        cfg = load_config()
+        basket = load_basket()
+        
+        # 创建多仓客户端
+        long_client = FTClient(
+            cfg['freqtrade']['long']['base_url'],
+            cfg['freqtrade']['long']['user'],
+            cfg['freqtrade']['long']['pass']
+        )
+        
+        # 更新确认消息为执行中
+        await query.edit_message_text(
+            f"🚀 **开多执行中** (ID: {op_id})\n\n⏳ 正在执行开多操作...",
+            parse_mode='Markdown'
+        )
+        
+        # 执行开多操作
+        results = []
+        success_count = 0
+        error_count = 0
+        
+        for i, pair in enumerate(basket, 1):
+            try:
+                # 执行开多
+                result = long_client.forcebuy(pair, cfg['defaults']['stake'])
+                
+                if result is not None:
+                    results.append(f"✅ {i}/{len(basket)} `{pair}` - 开多成功")
+                    success_count += 1
+                else:
+                    results.append(f"❌ {i}/{len(basket)} `{pair}` - 开多失败")
+                    error_count += 1
+                
+                # 延迟
+                if i < len(basket):  # 最后一笔不需要延迟
+                    await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
+                    
+            except Exception as e:
+                results.append(f"❌ {i}/{len(basket)} `{pair}` - 错误: {str(e)[:50]}")
+                error_count += 1
+        
+        # 构建结果消息
+        message = f"🚀 **开多完成** (ID: {op_id})\n\n"
+        message += "📊 **执行结果**:\n"
+        message += f"  • 成功: {success_count} 笔\n"
+        message += f"  • 失败: {error_count} 笔\n"
+        message += f"  • 总计: {len(basket)} 笔\n\n"
+        
+        # 显示详细结果（最多显示前5个）
+        message += "📋 **详细结果**:\n"
+        for result in results[:5]:
+            message += f"  {result}\n"
+        
+        if len(results) > 5:
+            message += f"  ... 还有 {len(results) - 5} 笔\n"
+        
+        # 添加时间戳
+        current_time = datetime.now().strftime("%H:%M:%S")
+        message += f"\n⏰ 完成时间: {current_time}"
+        
+        await query.edit_message_text(message, parse_mode='Markdown')
+        
+        # 写入审计日志
+        audit_log = f"[{datetime.now().isoformat()}] GO_LONG {op_id} - Success: {success_count}, Failed: {error_count}, Total: {len(basket)}\n"
+        try:
+            os.makedirs('runtime', exist_ok=True)
+            with open('runtime/audit.log', 'a', encoding='utf-8') as f:
+                f.write(audit_log)
+        except Exception as e:
+            print(f"写入审计日志失败: {e}")
+        
+    except Exception as e:
+        await query.edit_message_text(f"❌ **开多执行失败** (ID: {op_id})\n\n错误: {str(e)}", parse_mode='Markdown')
+
+async def execute_flat(query, op_id: str):
+    """执行全平操作"""
+    try:
+        # 加载配置
+        cfg = load_config()
+        
+        # 创建客户端
+        long_client = FTClient(
+            cfg['freqtrade']['long']['base_url'],
+            cfg['freqtrade']['long']['user'],
+            cfg['freqtrade']['long']['pass']
+        )
+        short_client = FTClient(
+            cfg['freqtrade']['short']['base_url'],
+            cfg['freqtrade']['short']['user'],
+            cfg['freqtrade']['short']['pass']
+        )
+        
+        # 更新确认消息为执行中
+        await query.edit_message_text(
+            f"🚫 **全平执行中** (ID: {op_id})\n\n⏳ 正在执行全平操作...",
+            parse_mode='Markdown'
+        )
+        
+        # 执行全平操作
+        results = []
+        total_success = 0
+        total_error = 0
+        
+        # 1. 取消所有开放订单
+        await query.edit_message_text(
+            f"🚫 **全平执行中** (ID: {op_id})\n\n⏳ 正在取消开放订单...",
+            parse_mode='Markdown'
+        )
+        
+        try:
+            long_cancel = long_client.cancel_open_orders()
+            short_cancel = short_client.cancel_open_orders()
+            results.append("✅ 取消开放订单完成")
+        except Exception as e:
+            results.append(f"❌ 取消开放订单失败: {str(e)[:50]}")
+        
+        # 2. 平掉多仓持仓
+        await query.edit_message_text(
+            f"🚫 **全平执行中** (ID: {op_id})\n\n⏳ 正在平掉多仓持仓...",
+            parse_mode='Markdown'
+        )
+        
+        try:
+            long_positions = long_client.list_positions()
+            if long_positions:
+                for i, pos in enumerate(long_positions, 1):
+                    try:
+                        if isinstance(pos, dict) and 'trade_id' in pos:
+                            trade_id = pos['trade_id']
+                            pair = pos.get('pair', 'Unknown')
+                            result = long_client._request("POST", "/api/v1/forceexit", json={"tradeid": trade_id})
+                            if result is not None:
+                                results.append(f"✅ 多仓平仓 {i}: {pair}")
+                                total_success += 1
+                            else:
+                                results.append(f"❌ 多仓平仓 {i}: {pair} - 失败")
+                                total_error += 1
+                            
+                            # 延迟
+                            if i < len(long_positions):
+                                await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
+                    except Exception as e:
+                        results.append(f"❌ 多仓平仓 {i}: 错误 - {str(e)[:50]}")
+                        total_error += 1
+            else:
+                results.append("ℹ️ 无多仓持仓")
+        except Exception as e:
+            results.append(f"❌ 获取多仓持仓失败: {str(e)[:50]}")
+        
+        # 3. 平掉空仓持仓
+        await query.edit_message_text(
+            f"🚫 **全平执行中** (ID: {op_id})\n\n⏳ 正在平掉空仓持仓...",
+            parse_mode='Markdown'
+        )
+        
+        try:
+            short_positions = short_client.list_positions()
+            if short_positions:
+                for i, pos in enumerate(short_positions, 1):
+                    try:
+                        if isinstance(pos, dict) and 'trade_id' in pos:
+                            trade_id = pos['trade_id']
+                            pair = pos.get('pair', 'Unknown')
+                            result = short_client._request("POST", "/api/v1/forceexit", json={"tradeid": trade_id})
+                            if result is not None:
+                                results.append(f"✅ 空仓平仓 {i}: {pair}")
+                                total_success += 1
+                            else:
+                                results.append(f"❌ 空仓平仓 {i}: {pair} - 失败")
+                                total_error += 1
+                            
+                            # 延迟
+                            if i < len(short_positions):
+                                await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
+                    except Exception as e:
+                        results.append(f"❌ 空仓平仓 {i}: 错误 - {str(e)[:50]}")
+                        total_error += 1
+            else:
+                results.append("ℹ️ 无空仓持仓")
+        except Exception as e:
+            results.append(f"❌ 获取空仓持仓失败: {str(e)[:50]}")
+        
+        # 构建结果消息
+        message = f"🚫 **全平完成** (ID: {op_id})\n\n"
+        message += "📊 **执行结果**:\n"
+        message += f"  • 成功: {total_success} 笔\n"
+        message += f"  • 失败: {total_error} 笔\n"
+        message += f"  • 总计: {total_success + total_error} 笔\n\n"
+        
+        # 显示详细结果（最多显示前8个）
+        message += "📋 **详细结果**:\n"
+        for result in results[:8]:
+            message += f"  {result}\n"
+        
+        if len(results) > 8:
+            message += f"  ... 还有 {len(results) - 8} 项\n"
+        
+        # 添加时间戳
+        current_time = datetime.now().strftime("%H:%M:%S")
+        message += f"\n⏰ 完成时间: {current_time}"
+        
+        await query.edit_message_text(message, parse_mode='Markdown')
+        
+        # 写入审计日志
+        audit_log = f"[{datetime.now().isoformat()}] FLAT {op_id} - Success: {total_success}, Failed: {total_error}, Total: {total_success + total_error}\n"
+        try:
+            os.makedirs('runtime', exist_ok=True)
+            with open('runtime/audit.log', 'a', encoding='utf-8') as f:
+                f.write(audit_log)
+        except Exception as e:
+            print(f"写入审计日志失败: {e}")
+        
+    except Exception as e:
+        await query.edit_message_text(f"❌ **全平执行失败** (ID: {op_id})\n\n错误: {str(e)}", parse_mode='Markdown')
+
+async def execute_go_short(query, op_id: str):
+    """执行开空操作（先平多后开空）"""
+    try:
+        # 加载配置和篮子
+        cfg = load_config()
+        basket = load_basket()
+        
+        # 创建客户端
+        long_client = FTClient(
+            cfg['freqtrade']['long']['base_url'],
+            cfg['freqtrade']['long']['user'],
+            cfg['freqtrade']['long']['pass']
+        )
+        short_client = FTClient(
+            cfg['freqtrade']['short']['base_url'],
+            cfg['freqtrade']['short']['user'],
+            cfg['freqtrade']['short']['pass']
+        )
+        
+        # 更新确认消息为执行中
+        await query.edit_message_text(
+            f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 正在执行反向操作...",
+            parse_mode='Markdown'
+        )
+        
+        results = []
+        total_success = 0
+        total_error = 0
+        
+        # 第一步：平掉所有多仓持仓
+        await query.edit_message_text(
+            f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 第一步：正在平掉多仓持仓...",
+            parse_mode='Markdown'
+        )
+        
+        try:
+            # 取消开放订单
+            long_client.cancel_open_orders()
+            results.append("✅ 取消多仓开放订单完成")
+            
+            # 获取多仓持仓
+            long_positions = long_client.list_positions()
+            if long_positions:
+                # 逐个平掉多仓
+                for i, pos in enumerate(long_positions, 1):
+                    try:
+                        if isinstance(pos, dict) and 'trade_id' in pos:
+                            trade_id = pos['trade_id']
+                            pair = pos.get('pair', 'Unknown')
+                            result = long_client._request("POST", "/api/v1/forceexit", json={"tradeid": trade_id})
+                            if result is not None:
+                                results.append(f"✅ 平多仓 {i}: {pair}")
+                                total_success += 1
+                            else:
+                                results.append(f"❌ 平多仓 {i}: {pair} - 失败")
+                                total_error += 1
+                            
+                            # 延迟
+                            if i < len(long_positions):
+                                await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
+                    except Exception as e:
+                        results.append(f"❌ 平多仓 {i}: 错误 - {str(e)[:50]}")
+                        total_error += 1
+                
+                # 轮询直到多仓为0或超时
+                await query.edit_message_text(
+                    f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 等待多仓平仓完成...",
+                    parse_mode='Markdown'
+                )
+                
+                start_time = time.time()
+                timeout = cfg['defaults']['poll_timeout_sec']
+                interval = cfg['defaults']['poll_interval_sec']
+                
+                while time.time() - start_time < timeout:
+                    remaining_positions = long_client.list_positions()
+                    if not remaining_positions:
+                        results.append("✅ 多仓已全部平仓")
+                        break
+                    
+                    await asyncio.sleep(interval)
+                else:
+                    results.append(f"⚠️ 多仓平仓超时 ({timeout}秒)")
+                    
+            else:
+                results.append("ℹ️ 无多仓持仓")
+                
+        except Exception as e:
+            results.append(f"❌ 平多仓失败: {str(e)[:50]}")
+        
+        # 第二步：逐个开空仓
+        await query.edit_message_text(
+            f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 第二步：正在开空仓...",
+            parse_mode='Markdown'
+        )
+        
+        for i, pair in enumerate(basket, 1):
+            try:
+                # 执行开空
+                result = short_client.forceshort(pair, cfg['defaults']['stake'])
+                
+                if result is not None:
+                    results.append(f"✅ 开空仓 {i}/{len(basket)}: {pair}")
+                    total_success += 1
+                else:
+                    results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - 失败")
+                    total_error += 1
+                
+                # 延迟
+                if i < len(basket):  # 最后一笔不需要延迟
+                    await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
+                    
+            except Exception as e:
+                results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - 错误: {str(e)[:50]}")
+                total_error += 1
+        
+        # 构建结果消息
+        message = f"🔴 **开空完成** (ID: {op_id})\n\n"
+        message += "📊 **执行结果**:\n"
+        message += f"  • 成功: {total_success} 笔\n"
+        message += f"  • 失败: {total_error} 笔\n"
+        message += f"  • 总计: {total_success + total_error} 笔\n\n"
+        
+        # 显示详细结果（最多显示前8个）
+        message += "📋 **详细结果**:\n"
+        for result in results[:8]:
+            message += f"  {result}\n"
+        
+        if len(results) > 8:
+            message += f"  ... 还有 {len(results) - 8} 项\n"
+        
+        # 添加时间戳
+        current_time = datetime.now().strftime("%H:%M:%S")
+        message += f"\n⏰ 完成时间: {current_time}"
+        
+        await query.edit_message_text(message, parse_mode='Markdown')
+        
+        # 写入审计日志
+        audit_log = f"[{datetime.now().isoformat()}] GO_SHORT {op_id} - Success: {total_success}, Failed: {total_error}, Total: {total_success + total_error}\n"
+        try:
+            os.makedirs('runtime', exist_ok=True)
+            with open('runtime/audit.log', 'a', encoding='utf-8') as f:
+                f.write(audit_log)
+        except Exception as e:
+            print(f"写入审计日志失败: {e}")
+        
+    except Exception as e:
+        await query.edit_message_text(f"❌ **开空执行失败** (ID: {op_id})\n\n错误: {str(e)}", parse_mode='Markdown')
 
 def check_permission(user_id: int) -> tuple[bool, str]:
     """检查用户权限和武装状态"""
@@ -805,6 +1402,9 @@ def run_telegram_bot():
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("basket_set", basket_set_command))
     application.add_handler(CommandHandler("stake", stake_command))
+    application.add_handler(CommandHandler("go_long", go_long_command))
+    application.add_handler(CommandHandler("flat", flat_command))
+    application.add_handler(CommandHandler("go_short", go_short_command))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
