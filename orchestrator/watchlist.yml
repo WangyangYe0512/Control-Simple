@@ -1,1 +1,3 @@
-basket: ["BTC/USDT", "ETH/USDT"]
+basket:
+- SOL/USDT
+- DOGE/USDT

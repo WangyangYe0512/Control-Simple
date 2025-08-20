@@ -322,7 +322,8 @@ async def arm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # 检查是否启用武装机制
-    if not config['telegram']['require_arm']:
+    cfg = load_config()
+    if not cfg['telegram']['require_arm']:
         await update.message.reply_text("ℹ️ 武装机制已禁用，无需武装即可执行交易命令")
         return
     
@@ -344,6 +345,273 @@ async def arm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ 系统已武装 {minutes} 分钟\n可以执行交易命令")
     else:
         await update.message.reply_text("❌ 密码错误")
+
+async def basket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /basket 命令"""
+    # 检查是否在目标群组和 Topic
+    if update.message.chat.id != config['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != config['telegram']['topic_id']:
+        return
+    
+    try:
+        # 加载配置和篮子
+        cfg = load_config()
+        basket = load_basket()
+        
+        # 构建响应消息
+        message = "📊 **当前篮子配置**\n\n"
+        
+        # 篮子内容
+        if basket:
+            message += f"🛒 **篮子内容** ({len(basket)} 个交易对):\n"
+            for i, pair in enumerate(basket, 1):
+                message += f"  {i}. `{pair}`\n"
+        else:
+            message += "🛒 **篮子内容**: 空\n"
+        
+        # 交易参数
+        message += "\n⚙️ **交易参数**:\n"
+        message += f"  • 每笔名义: `{cfg['defaults']['stake']}` USDT\n"
+        message += f"  • 延迟时间: `{cfg['defaults']['delay_ms']}` ms\n"
+        message += f"  • 轮询超时: `{cfg['defaults']['poll_timeout_sec']}` 秒\n"
+        message += f"  • 轮询间隔: `{cfg['defaults']['poll_interval_sec']}` 秒\n"
+        
+        # 实例信息
+        message += "\n🖥️ **实例信息**:\n"
+        message += f"  • 多仓实例: `{cfg['freqtrade']['long']['base_url']}`\n"
+        message += f"  • 空仓实例: `{cfg['freqtrade']['short']['base_url']}`\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ 获取篮子信息失败: {str(e)}")
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /status 命令"""
+    # 检查是否在目标群组和 Topic
+    if update.message.chat.id != config['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != config['telegram']['topic_id']:
+        return
+    
+    try:
+        # 加载配置
+        cfg = load_config()
+        
+        # 创建客户端
+        long_client = FTClient(
+            cfg['freqtrade']['long']['base_url'],
+            cfg['freqtrade']['long']['user'],
+            cfg['freqtrade']['long']['pass']
+        )
+        short_client = FTClient(
+            cfg['freqtrade']['short']['base_url'],
+            cfg['freqtrade']['short']['user'],
+            cfg['freqtrade']['short']['pass']
+        )
+        
+        # 构建状态消息
+        message = "📈 **实例状态摘要**\n\n"
+        
+        # 获取多仓实例状态
+        try:
+            long_positions = long_client.list_positions()
+            long_count = len(long_positions) if long_positions else 0
+            long_status = "🟢 在线" if long_positions is not None else "🔴 离线"
+            
+            message += f"🔵 **多仓实例** (`{cfg['freqtrade']['long']['base_url']}`)\n"
+            message += f"  • 状态: {long_status}\n"
+            message += f"  • 持仓数量: {long_count}\n"
+            
+            if long_positions and long_count > 0:
+                message += "  • 持仓详情:\n"
+                for trade in long_positions[:5]:  # 最多显示5个
+                    if isinstance(trade, dict):
+                        pair = trade.get('pair', 'Unknown')
+                        amount = trade.get('amount', 0)
+                        profit_pct = trade.get('profit_pct', 0)
+                        profit_sign = "+" if profit_pct >= 0 else ""
+                        message += f"    - `{pair}`: {amount:.4f} ({profit_sign}{profit_pct:.2f}%)\n"
+                if long_count > 5:
+                    message += f"    ... 还有 {long_count - 5} 个持仓\n"
+            
+        except Exception as e:
+            message += f"🔵 **多仓实例**: 🔴 连接失败 ({str(e)[:50]}...)\n"
+        
+        # 获取空仓实例状态
+        try:
+            short_positions = short_client.list_positions()
+            short_count = len(short_positions) if short_positions else 0
+            short_status = "🟢 在线" if short_positions is not None else "🔴 离线"
+            
+            message += f"\n🔴 **空仓实例** (`{cfg['freqtrade']['short']['base_url']}`)\n"
+            message += f"  • 状态: {short_status}\n"
+            message += f"  • 持仓数量: {short_count}\n"
+            
+            if short_positions and short_count > 0:
+                message += "  • 持仓详情:\n"
+                for trade in short_positions[:5]:  # 最多显示5个
+                    if isinstance(trade, dict):
+                        pair = trade.get('pair', 'Unknown')
+                        amount = trade.get('amount', 0)
+                        profit_pct = trade.get('profit_pct', 0)
+                        profit_sign = "+" if profit_pct >= 0 else ""
+                        message += f"    - `{pair}`: {amount:.4f} ({profit_sign}{profit_pct:.2f}%)\n"
+                if short_count > 5:
+                    message += f"    ... 还有 {short_count - 5} 个持仓\n"
+            
+        except Exception as e:
+            message += f"\n🔴 **空仓实例**: 🔴 连接失败 ({str(e)[:50]}...)\n"
+        
+        # 总结
+        try:
+            total_positions = long_count + short_count
+            message += f"\n📊 **总计**: {total_positions} 个活跃持仓"
+        except:
+            message += "\n📊 **总计**: 无法统计"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ 获取状态信息失败: {str(e)}")
+
+async def basket_set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /basket_set 命令"""
+    # 检查是否在目标群组和 Topic
+    if update.message.chat.id != config['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != config['telegram']['topic_id']:
+        return
+    
+    # 检查权限
+    has_permission, error_msg = check_permission(update.message.from_user.id)
+    if not has_permission:
+        await update.message.reply_text(error_msg)
+        return
+    
+    # 检查参数
+    if not context.args:
+        await update.message.reply_text("❌ 用法: `/basket_set <pair1> <pair2> ...`\n例如: `/basket_set BTC/USDT ETH/USDT`", parse_mode='Markdown')
+        return
+    
+    try:
+        # 解析和验证交易对
+        raw_pairs = context.args
+        validated_pairs = []
+        invalid_pairs = []
+        
+        for pair in raw_pairs:
+            # 转换为大写
+            pair_upper = pair.upper()
+            
+            # 格式校验：BASE/QUOTE
+            if re.match(r'^[A-Z0-9]+/[A-Z0-9]+$', pair_upper):
+                validated_pairs.append(pair_upper)
+            else:
+                invalid_pairs.append(pair)
+        
+        # 去重
+        validated_pairs = list(dict.fromkeys(validated_pairs))  # 保持顺序的去重
+        
+        if invalid_pairs:
+            await update.message.reply_text(f"❌ 无效的交易对格式: {', '.join(invalid_pairs)}\n正确格式: BASE/QUOTE (如 BTC/USDT)")
+            return
+        
+        if not validated_pairs:
+            await update.message.reply_text("❌ 没有有效的交易对")
+            return
+        
+        # 更新 watchlist.yml 文件
+        watchlist_data = {
+            'basket': validated_pairs
+        }
+        
+        with open('watchlist.yml', 'w', encoding='utf-8') as f:
+            yaml.dump(watchlist_data, f, default_flow_style=False, allow_unicode=True)
+        
+        # 构建成功消息
+        message = "✅ **篮子已更新**\n\n"
+        message += f"🛒 **新篮子内容** ({len(validated_pairs)} 个交易对):\n"
+        for i, pair in enumerate(validated_pairs, 1):
+            message += f"  {i}. `{pair}`\n"
+        
+        if len(raw_pairs) != len(validated_pairs):
+            removed_count = len(raw_pairs) - len(validated_pairs)
+            message += f"\n📝 已自动去重和格式化，移除了 {removed_count} 个重复项"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ 设置篮子失败: {str(e)}")
+
+async def stake_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /stake 命令"""
+    # 检查是否在目标群组和 Topic
+    if update.message.chat.id != config['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != config['telegram']['topic_id']:
+        return
+    
+    # 检查权限
+    has_permission, error_msg = check_permission(update.message.from_user.id)
+    if not has_permission:
+        await update.message.reply_text(error_msg)
+        return
+    
+    # 检查参数
+    if not context.args:
+        # 显示当前 stake
+        cfg = load_config()
+        current_stake = cfg['defaults']['stake']
+        await update.message.reply_text(f"💰 **当前每笔名义**: `{current_stake}` USDT\n\n用法: `/stake <amount>`\n例如: `/stake 500`", parse_mode='Markdown')
+        return
+    
+    try:
+        # 解析金额
+        amount_str = context.args[0]
+        
+        try:
+            amount = float(amount_str)
+        except ValueError:
+            await update.message.reply_text(f"❌ 无效的金额格式: `{amount_str}`\n请输入数字，例如: `/stake 500`", parse_mode='Markdown')
+            return
+        
+        # 验证金额范围
+        if amount <= 0:
+            await update.message.reply_text("❌ 金额必须大于 0")
+            return
+        
+        if amount > 10000:  # 设置一个合理的上限
+            await update.message.reply_text("❌ 金额过大，最大允许 10000 USDT")
+            return
+        
+        # 读取当前配置
+        cfg = load_config()
+        old_stake = cfg['defaults']['stake']
+        
+        # 更新配置
+        cfg['defaults']['stake'] = amount
+        
+        # 写回配置文件
+        with open('config.yml', 'w', encoding='utf-8') as f:
+            yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+        
+        # 构建成功消息
+        message = "✅ **每笔名义已更新**\n\n"
+        message += f"💰 **旧值**: `{old_stake}` USDT\n"
+        message += f"💰 **新值**: `{amount}` USDT\n"
+        
+        # 如果金额变化很大，给出提醒
+        if amount > old_stake * 2:
+            message += f"\n⚠️ **提醒**: 新金额是原来的 {amount/old_stake:.1f} 倍，请确认"
+        elif amount < old_stake * 0.5:
+            message += f"\n⚠️ **提醒**: 新金额是原来的 {amount/old_stake:.1f} 倍，请确认"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ 设置每笔名义失败: {str(e)}")
 
 def check_permission(user_id: int) -> tuple[bool, str]:
     """检查用户权限和武装状态"""
@@ -383,6 +651,10 @@ def run_telegram_bot():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("arm", arm_command))
+    application.add_handler(CommandHandler("basket", basket_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("basket_set", basket_set_command))
+    application.add_handler(CommandHandler("stake", stake_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # 添加错误处理
