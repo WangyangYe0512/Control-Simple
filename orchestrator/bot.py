@@ -3,6 +3,8 @@ import os
 import re
 import httpx
 from typing import Optional, Dict, Any
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 def load_config():
     """加载配置文件"""
@@ -205,153 +207,91 @@ if __name__ == "__main__":
     print(f"Long 客户端: {long_client.base_url}")
     print(f"Short 客户端: {short_client.base_url}")
     
-    # 测试不存在的路径
-    print("\n=== 错误处理测试 ===")
-    # 创建一个指向本地无效端口的客户端进行测试
-    test_client = FTClient("http://127.0.0.1:9999", "test", "test")
-    print(f"Test 客户端: {test_client.base_url}")
+    print("\n=== 启动 Telegram Bot ===")
+
+# Telegram Bot 功能
+print("\n=== 启动 Telegram Bot ===")
+
+# 全局变量
+config = load_config()
+long_client = FTClient(
+    config['freqtrade']['long']['base_url'],
+    config['freqtrade']['long']['user'],
+    config['freqtrade']['long']['pass']
+)
+short_client = FTClient(
+    config['freqtrade']['short']['base_url'],
+    config['freqtrade']['short']['user'],
+    config['freqtrade']['short']['pass']
+)
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /start 命令"""
+    await update.message.reply_text("🤖 Tiny Orchestrator 已启动！\n使用 /help 查看可用命令。")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /help 命令"""
+    help_text = """
+🤖 **Tiny Orchestrator 命令列表**
+
+📊 **查看命令：**
+• `/basket` - 显示当前篮子与参数
+• `/status` - 显示实例状态与最近摘要
+
+⚙️ **设置命令：**
+• `/basket_set <pairs...>` - 设置篮子
+• `/stake <amount>` - 设置每笔名义
+
+🚀 **交易命令：**
+• `/go_long` - 开多确认卡片
+• `/go_short` - 反向开空确认卡片  
+• `/flat` - 全平确认卡片
+
+🔐 **安全命令：**
+• `/arm <pass>` - 武装系统（如启用）
+
+---
+*仅管理员可在指定 Topic 内使用交易命令*
+    """
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理所有消息，过滤 chat/topic"""
+    # 检查是否在目标群组
+    if update.message.chat.id != config['telegram']['chat_id']:
+        return  # 忽略非目标群组
     
-    try:
-        result = test_client._request("GET", "/test")
-        print(f"测试路径结果: {result}")
-    except Exception as e:
-        print(f"网络错误测试通过: {type(e).__name__}")
+    # 检查是否在目标 Topic
+    if update.message.message_thread_id != config['telegram']['topic_id']:
+        return  # 忽略非目标 Topic
     
-    # 测试 list_positions()
-    print("\n=== list_positions 测试 ===")
-    try:
-        positions = test_client.list_positions()
-        print(f"404 端点测试结果: {positions}")
-    except Exception as e:
-        print(f"list_positions 异常: {e}")
+    # 在目标 Topic 内，回复 pong
+    await update.message.reply_text("pong")
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """错误处理"""
+    print(f"Telegram Bot 错误: {context.error}")
+
+def run_telegram_bot():
+    """启动 Telegram Bot"""
+    # 创建应用
+    application = Application.builder().token(config['telegram']['token']).build()
     
-    # 测试真实实例的 list_positions
-    print("\n=== 真实实例测试 ===")
-    try:
-        long_positions = long_client.list_positions()
-        print(f"Long 实例持仓: {len(long_positions)} 个")
-        if long_positions:
-            print(f"持仓详情: {long_positions[:2]}...")  # 只显示前2个
-    except Exception as e:
-        print(f"Long 实例异常: {e}")
+    # 添加处理器
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    try:
-        short_positions = short_client.list_positions()
-        print(f"Short 实例持仓: {len(short_positions)} 个")
-        if short_positions:
-            print(f"持仓详情: {short_positions[:2]}...")  # 只显示前2个
-    except Exception as e:
-        print(f"Short 实例异常: {e}")
-
-# 测试交易方法（逐一测试功能）
-print("\n=== 交易方法详细测试 ===")
-
-# 测试 1: cancel_open_orders()
-print("1. 测试 cancel_open_orders():")
-try:
-    result1 = long_client.cancel_open_orders()
-    print(f"   Long 客户端: {result1}")
-    result2 = short_client.cancel_open_orders()
-    print(f"   Short 客户端: {result2}")
-except Exception as e:
-    print(f"   错误: {e}")
-
-# 测试 2: forcebuy() - 实际调用（使用实际可用的交易对）
-print("\n2. 测试 forcebuy() [实际调用]:")
-try:
-    result = long_client.forcebuy("BNB/USDT:USDT", 50)  # 使用实际可用的交易对
-    print(f"   Long 客户端 forcebuy 结果: {result}")
-except Exception as e:
-    print(f"   Long 客户端 forcebuy 错误: {e}")
-
-# 测试 3: forceshort() - 实际调用（使用实际可用的交易对）
-print("\n3. 测试 forceshort() [实际调用]:")
-try:
-    result = short_client.forceshort("ETH/USDT:USDT", 50)  # 使用不同的交易对避免冲突
-    print(f"   Short 客户端 forceshort 结果: {result}")
-except Exception as e:
-    print(f"   Short 客户端 forceshort 错误: {e}")
-
-# 等待一下让订单处理
-import time
-print("\n   等待 2 秒让订单处理...")
-time.sleep(2)
-
-# 重新获取持仓状态
-print("\n4. 检查新的持仓状态:")
-try:
-    new_long_positions = long_client.list_positions()
-    print(f"   Long 客户端持仓: {len(new_long_positions)} 个")
-    for pos in new_long_positions:
-        pair = pos.get('pair', 'N/A')
-        is_short = pos.get('is_short', False)
-        trade_id = pos.get('trade_id', 'N/A')
-        print(f"     - {pair} ({'空仓' if is_short else '多仓'}, ID: {trade_id})")
+    # 添加错误处理
+    application.add_error_handler(error_handler)
     
-    new_short_positions = short_client.list_positions()
-    print(f"   Short 客户端持仓: {len(new_short_positions)} 个")
-    for pos in new_short_positions:
-        pair = pos.get('pair', 'N/A')
-        is_short = pos.get('is_short', False)
-        trade_id = pos.get('trade_id', 'N/A')
-        print(f"     - {pair} ({'空仓' if is_short else '多仓'}, ID: {trade_id})")
-except Exception as e:
-    print(f"   获取新持仓失败: {e}")
+    # 启动 Bot
+    print("🤖 启动 Telegram Bot...")
+    print(f"   目标群组: {config['telegram']['chat_id']}")
+    print(f"   目标 Topic: {config['telegram']['topic_id']}")
+    print(f"   管理员: {config['telegram']['admins']}")
+    
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-# 测试 5: forcesell() - 实际调用
-print("\n5. 测试 forcesell() [实际调用]:")
-try:
-    new_long_positions = long_client.list_positions()
-    if new_long_positions:
-        # 找到多仓
-        long_trade = None
-        for pos in new_long_positions:
-            if not pos.get('is_short', False):
-                long_trade = pos
-                break
-        
-        if long_trade:
-            test_pair = long_trade.get('pair', 'N/A')
-            result = long_client.forcesell(test_pair)
-            print(f"   Long 客户端 forcesell({test_pair}) 结果: {result}")
-        else:
-            print("   当前无多仓持仓")
-    else:
-        print("   当前无持仓")
-except Exception as e:
-    print(f"   Long 客户端 forcesell 错误: {e}")
-
-# 测试 6: forcecover() - 实际调用
-print("\n6. 测试 forcecover() [实际调用]:")
-try:
-    new_short_positions = short_client.list_positions()
-    if new_short_positions:
-        # 找到空仓
-        short_trade = None
-        for pos in new_short_positions:
-            if pos.get('is_short', False):
-                short_trade = pos
-                break
-        
-        if short_trade:
-            test_pair = short_trade.get('pair', 'N/A')
-            result = short_client.forcecover(test_pair)
-            print(f"   Short 客户端 forcecover({test_pair}) 结果: {result}")
-        else:
-            print("   当前无空仓持仓")
-    else:
-        print("   当前无持仓")
-except Exception as e:
-    print(f"   Short 客户端 forcecover 错误: {e}")
-
-# 测试错误处理
-print("\n7. 测试错误处理:")
-try:
-    test_client = FTClient("http://127.0.0.1:9999", "test", "test")
-    result = test_client.forcebuy("BTC/USDT", 100)
-    print(f"   假地址测试: {result}")
-except Exception as e:
-    print(f"   假地址测试 - 预期错误: {type(e).__name__}")
-
-print("\n=== 交易方法测试完成 ===")
-print("boot ok")
+# 启动 Bot
+run_telegram_bot()
