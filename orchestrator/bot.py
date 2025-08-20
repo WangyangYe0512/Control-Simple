@@ -4,8 +4,8 @@ import re
 import httpx
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 def load_config():
     """加载配置文件"""
@@ -360,7 +360,8 @@ async def basket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         basket = load_basket()
         
         # 构建响应消息
-        message = "📊 **当前篮子配置**\n\n"
+        current_time = datetime.now().strftime("%H:%M:%S")
+        message = f"📊 **当前篮子配置** (更新时间: {current_time})\n\n"
         
         # 篮子内容
         if basket:
@@ -377,12 +378,13 @@ async def basket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += f"  • 轮询超时: `{cfg['defaults']['poll_timeout_sec']}` 秒\n"
         message += f"  • 轮询间隔: `{cfg['defaults']['poll_interval_sec']}` 秒\n"
         
-        # 实例信息
-        message += "\n🖥️ **实例信息**:\n"
-        message += f"  • 多仓实例: `{cfg['freqtrade']['long']['base_url']}`\n"
-        message += f"  • 空仓实例: `{cfg['freqtrade']['short']['base_url']}`\n"
+        # 创建内联键盘
+        keyboard = [
+            [InlineKeyboardButton("🔄 刷新", callback_data="refresh_basket")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(message, parse_mode='Markdown')
+        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
         
     except Exception as e:
         await update.message.reply_text(f"❌ 获取篮子信息失败: {str(e)}")
@@ -412,7 +414,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         # 构建状态消息
-        message = "📈 **实例状态摘要**\n\n"
+        current_time = datetime.now().strftime("%H:%M:%S")
+        message = f"📈 **实例状态摘要** (更新时间: {current_time})\n\n"
         
         # 获取多仓实例状态
         try:
@@ -471,7 +474,13 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             message += "\n📊 **总计**: 无法统计"
         
-        await update.message.reply_text(message, parse_mode='Markdown')
+        # 创建内联键盘
+        keyboard = [
+            [InlineKeyboardButton("🔄 刷新", callback_data="refresh_status")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
         
     except Exception as e:
         await update.message.reply_text(f"❌ 获取状态信息失败: {str(e)}")
@@ -613,6 +622,147 @@ async def stake_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ 设置每笔名义失败: {str(e)}")
 
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理内联键盘按钮回调"""
+    query = update.callback_query
+    await query.answer()  # 立即响应回调
+    
+    # 检查是否在目标群组和 Topic
+    if query.message.chat.id != config['telegram']['chat_id']:
+        return
+    if query.message.message_thread_id != config['telegram']['topic_id']:
+        return
+    
+    try:
+        if query.data == "refresh_basket":
+            # 刷新篮子信息
+            cfg = load_config()
+            basket = load_basket()
+            
+            # 添加时间戳以区分内容
+            current_time = datetime.now().strftime("%H:%M:%S")
+            message = f"📊 **当前篮子配置** (刷新时间: {current_time})\n\n"
+            
+            if basket:
+                message += f"🛒 **篮子内容** ({len(basket)} 个交易对):\n"
+                for i, pair in enumerate(basket, 1):
+                    message += f"  {i}. `{pair}`\n"
+            else:
+                message += "🛒 **篮子内容**: 空\n"
+            
+            message += "\n⚙️ **交易参数**:\n"
+            message += f"  • 每笔名义: `{cfg['defaults']['stake']}` USDT\n"
+            message += f"  • 延迟时间: `{cfg['defaults']['delay_ms']}` ms\n"
+            message += f"  • 轮询超时: `{cfg['defaults']['poll_timeout_sec']}` 秒\n"
+            message += f"  • 轮询间隔: `{cfg['defaults']['poll_interval_sec']}` 秒\n"
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 刷新", callback_data="refresh_basket")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            try:
+                await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+            except Exception as e:
+                if "Message is not modified" in str(e):
+                    # 如果内容相同，显示一个临时提示
+                    await query.answer("✅ 内容已是最新", show_alert=False)
+                else:
+                    raise e
+            
+        elif query.data == "refresh_status":
+            # 刷新状态信息
+            cfg = load_config()
+            
+            long_client = FTClient(
+                cfg['freqtrade']['long']['base_url'],
+                cfg['freqtrade']['long']['user'],
+                cfg['freqtrade']['long']['pass']
+            )
+            short_client = FTClient(
+                cfg['freqtrade']['short']['base_url'],
+                cfg['freqtrade']['short']['user'],
+                cfg['freqtrade']['short']['pass']
+            )
+            
+            # 添加时间戳以区分内容
+            current_time = datetime.now().strftime("%H:%M:%S")
+            message = f"📈 **实例状态摘要** (刷新时间: {current_time})\n\n"
+            
+            # 获取多仓实例状态
+            try:
+                long_positions = long_client.list_positions()
+                long_count = len(long_positions) if long_positions else 0
+                long_status = "🟢 在线" if long_positions is not None else "🔴 离线"
+                
+                message += f"🔵 **多仓实例** (`{cfg['freqtrade']['long']['base_url']}`)\n"
+                message += f"  • 状态: {long_status}\n"
+                message += f"  • 持仓数量: {long_count}\n"
+                
+                if long_positions and long_count > 0:
+                    message += "  • 持仓详情:\n"
+                    for trade in long_positions[:5]:
+                        if isinstance(trade, dict):
+                            pair = trade.get('pair', 'Unknown')
+                            amount = trade.get('amount', 0)
+                            profit_pct = trade.get('profit_pct', 0)
+                            profit_sign = "+" if profit_pct >= 0 else ""
+                            message += f"    - `{pair}`: {amount:.4f} ({profit_sign}{profit_pct:.2f}%)\n"
+                    if long_count > 5:
+                        message += f"    ... 还有 {long_count - 5} 个持仓\n"
+                
+            except Exception as e:
+                message += f"🔵 **多仓实例**: 🔴 连接失败 ({str(e)[:50]}...)\n"
+            
+            # 获取空仓实例状态
+            try:
+                short_positions = short_client.list_positions()
+                short_count = len(short_positions) if short_positions else 0
+                short_status = "🟢 在线" if short_positions is not None else "🔴 离线"
+                
+                message += f"\n🔴 **空仓实例** (`{cfg['freqtrade']['short']['base_url']}`)\n"
+                message += f"  • 状态: {short_status}\n"
+                message += f"  • 持仓数量: {short_count}\n"
+                
+                if short_positions and short_count > 0:
+                    message += "  • 持仓详情:\n"
+                    for trade in short_positions[:5]:
+                        if isinstance(trade, dict):
+                            pair = trade.get('pair', 'Unknown')
+                            amount = trade.get('amount', 0)
+                            profit_pct = trade.get('profit_pct', 0)
+                            profit_sign = "+" if profit_pct >= 0 else ""
+                            message += f"    - `{pair}`: {amount:.4f} ({profit_sign}{profit_pct:.2f}%)\n"
+                    if short_count > 5:
+                        message += f"    ... 还有 {short_count - 5} 个持仓\n"
+                
+            except Exception as e:
+                message += f"\n🔴 **空仓实例**: 🔴 连接失败 ({str(e)[:50]}...)\n"
+            
+            # 总结
+            try:
+                total_positions = long_count + short_count
+                message += f"\n📊 **总计**: {total_positions} 个活跃持仓"
+            except:
+                message += "\n📊 **总计**: 无法统计"
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 刷新", callback_data="refresh_status")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            try:
+                await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+            except Exception as e:
+                if "Message is not modified" in str(e):
+                    # 如果内容相同，显示一个临时提示
+                    await query.answer("✅ 内容已是最新", show_alert=False)
+                else:
+                    raise e
+            
+    except Exception as e:
+        await query.edit_message_text(f"❌ 刷新失败: {str(e)}")
+
 def check_permission(user_id: int) -> tuple[bool, str]:
     """检查用户权限和武装状态"""
     # 检查管理员权限
@@ -655,6 +805,7 @@ def run_telegram_bot():
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("basket_set", basket_set_command))
     application.add_handler(CommandHandler("stake", stake_command))
+    application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # 添加错误处理
