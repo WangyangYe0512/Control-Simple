@@ -85,10 +85,25 @@ class FTClient:
             # 处理 4xx/5xx 错误
             if response.status_code >= 400:
                 error_text = response.text[:200] if response.text else f"HTTP {response.status_code}"
+                
+                # 解析常见错误并返回友好信息
+                if "position for" in error_text and "already open" in error_text:
+                    # 持仓已存在错误
+                    return {"error": "position_exists", "message": "持仓已存在"}
+                elif "No open order for trade_id" in error_text:
+                    # 无开放订单错误
+                    return {"error": "no_open_order", "message": "无开放订单"}
+                elif "Symbol does not exist" in error_text:
+                    # 交易对不存在错误
+                    return {"error": "symbol_not_found", "message": "交易对不存在或未激活"}
+                elif "timed out" in str(error_text):
+                    # 超时错误
+                    return {"error": "timeout", "message": "请求超时"}
+                
                 # 只打印 5xx 服务器错误，4xx 客户端错误（如 404）是预期的
                 if response.status_code >= 500:
                     print(f"HTTP 错误 {response.status_code}: {error_text}")
-                    raise Exception(f"服务器错误 {response.status_code}: {error_text}")
+                    return {"error": "server_error", "message": f"服务器错误: {error_text[:100]}"}
                 return None
             
             # 尝试解析 JSON
@@ -99,7 +114,9 @@ class FTClient:
                 
         except Exception as e:
             print(f"请求失败 {method} {url}: {e}")
-            raise
+            if "timed out" in str(e):
+                return {"error": "timeout", "message": "请求超时"}
+            return {"error": "connection_error", "message": f"连接错误: {str(e)[:100]}"}
     
     def list_positions(self) -> list:
         """获取当前持仓列表"""
@@ -147,6 +164,29 @@ class FTClient:
             for pos in positions:
                 if isinstance(pos, dict) and pos.get('pair') == pair and not pos.get('is_short', False):
                     # 找到了对应的多仓，说明实际成功了
+                    return {"status": "success", "message": "Position found after timeout"}
+        
+        return result
+    
+    def forceshort(self, pair: str, stake: float) -> Optional[Dict[Any, Any]]:
+        """强制开空仓"""
+        # 使用 /forceenter 端点，side="short" 表示空仓
+        data = {
+            "pair": pair,
+            "side": "short"
+        }
+        result = self._request("POST", "/api/v1/forceenter", json=data)
+        
+        # 如果请求超时但实际可能成功，尝试检查是否真的成功了
+        if result is None:
+            # 等待一下再检查持仓
+            import time
+            time.sleep(2)
+            # 检查是否已经有这个交易对的持仓
+            positions = self.list_positions()
+            for pos in positions:
+                if isinstance(pos, dict) and pos.get('pair') == pair and pos.get('is_short', False):
+                    # 找到了对应的空仓，说明实际成功了
                     return {"status": "success", "message": "Position found after timeout"}
         
         return result
@@ -776,7 +816,7 @@ async def go_short_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 构建确认消息
         message = f"🔴 **开空确认** (ID: {op_id})\n\n"
         message += "📊 **操作详情**:\n"
-        message += "  • 第一步: 平掉所有多仓持仓\n"
+        message += "  • 第一步: 发送平仓信号给多仓账户\n"
         message += "  • 第二步: 逐个开空仓\n"
         message += f"  • 交易对数量: {len(basket)} 个\n"
         message += f"  • 每笔名义: {cfg['defaults']['stake']} USDT\n"
@@ -1023,8 +1063,26 @@ async def execute_go_long(query, op_id: str):
                 result = long_client.forcebuy(pair, cfg['defaults']['stake'])
                 
                 if result is not None:
-                    results.append(f"✅ {i}/{len(basket)} `{pair}` - 开多成功")
-                    success_count += 1
+                    if isinstance(result, dict) and "error" in result:
+                        # 处理特定错误类型
+                        error_type = result.get("error")
+                        error_msg = result.get("message", "未知错误")
+                        
+                        if error_type == "position_exists":
+                            results.append(f"⚠️ {i}/{len(basket)} `{pair}` - 持仓已存在")
+                            success_count += 1  # 持仓已存在也算成功
+                        elif error_type == "symbol_not_found":
+                            results.append(f"❌ {i}/{len(basket)} `{pair}` - 交易对不存在")
+                            error_count += 1
+                        elif error_type == "timeout":
+                            results.append(f"⏰ {i}/{len(basket)} `{pair}` - 请求超时")
+                            error_count += 1
+                        else:
+                            results.append(f"❌ {i}/{len(basket)} `{pair}` - {error_msg}")
+                            error_count += 1
+                    else:
+                        results.append(f"✅ {i}/{len(basket)} `{pair}` - 开多成功")
+                        success_count += 1
                 else:
                     results.append(f"❌ {i}/{len(basket)} `{pair}` - 开多失败")
                     error_count += 1
@@ -1110,7 +1168,11 @@ async def execute_flat(query, op_id: str):
             short_cancel = short_client.cancel_open_orders()
             results.append("✅ 取消开放订单完成")
         except Exception as e:
-            results.append(f"❌ 取消开放订单失败: {str(e)[:50]}")
+            # 检查是否是无开放订单的错误
+            if "No open order" in str(e) or "no_open_order" in str(e):
+                results.append("ℹ️ 无开放订单需要取消")
+            else:
+                results.append(f"❌ 取消开放订单失败: {str(e)[:50]}")
         
         # 2. 平掉多仓持仓
         await query.edit_message_text(
@@ -1128,8 +1190,19 @@ async def execute_flat(query, op_id: str):
                             pair = pos.get('pair', 'Unknown')
                             result = long_client._request("POST", "/api/v1/forceexit", json={"tradeid": trade_id})
                             if result is not None:
-                                results.append(f"✅ 多仓平仓 {i}: {pair}")
-                                total_success += 1
+                                if isinstance(result, dict) and "error" in result:
+                                    error_type = result.get("error")
+                                    error_msg = result.get("message", "未知错误")
+                                    
+                                    if error_type == "no_open_order":
+                                        results.append(f"ℹ️ 多仓平仓 {i}: {pair} - 无开放订单")
+                                        total_success += 1  # 无订单也算成功
+                                    else:
+                                        results.append(f"❌ 多仓平仓 {i}: {pair} - {error_msg}")
+                                        total_error += 1
+                                else:
+                                    results.append(f"✅ 多仓平仓 {i}: {pair}")
+                                    total_success += 1
                             else:
                                 results.append(f"❌ 多仓平仓 {i}: {pair} - 失败")
                                 total_error += 1
@@ -1161,8 +1234,19 @@ async def execute_flat(query, op_id: str):
                             pair = pos.get('pair', 'Unknown')
                             result = short_client._request("POST", "/api/v1/forceexit", json={"tradeid": trade_id})
                             if result is not None:
-                                results.append(f"✅ 空仓平仓 {i}: {pair}")
-                                total_success += 1
+                                if isinstance(result, dict) and "error" in result:
+                                    error_type = result.get("error")
+                                    error_msg = result.get("message", "未知错误")
+                                    
+                                    if error_type == "no_open_order":
+                                        results.append(f"ℹ️ 空仓平仓 {i}: {pair} - 无开放订单")
+                                        total_success += 1  # 无订单也算成功
+                                    else:
+                                        results.append(f"❌ 空仓平仓 {i}: {pair} - {error_msg}")
+                                        total_error += 1
+                                else:
+                                    results.append(f"✅ 空仓平仓 {i}: {pair}")
+                                    total_success += 1
                             else:
                                 results.append(f"❌ 空仓平仓 {i}: {pair} - 失败")
                                 total_error += 1
@@ -1240,9 +1324,9 @@ async def execute_go_short(query, op_id: str):
         total_success = 0
         total_error = 0
         
-        # 第一步：平掉所有多仓持仓
+        # 第一步：发送平仓信号给多仓账户
         await query.edit_message_text(
-            f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 第一步：正在平掉多仓持仓...",
+            f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 第一步：正在发送平仓信号...",
             parse_mode='Markdown'
         )
         
@@ -1251,10 +1335,10 @@ async def execute_go_short(query, op_id: str):
             long_client.cancel_open_orders()
             results.append("✅ 取消多仓开放订单完成")
             
-            # 获取多仓持仓
+            # 获取多仓持仓并发送平仓信号
             long_positions = long_client.list_positions()
             if long_positions:
-                # 逐个平掉多仓
+                # 逐个发送平仓信号
                 for i, pos in enumerate(long_positions, 1):
                     try:
                         if isinstance(pos, dict) and 'trade_id' in pos:
@@ -1262,44 +1346,37 @@ async def execute_go_short(query, op_id: str):
                             pair = pos.get('pair', 'Unknown')
                             result = long_client._request("POST", "/api/v1/forceexit", json={"tradeid": trade_id})
                             if result is not None:
-                                results.append(f"✅ 平多仓 {i}: {pair}")
-                                total_success += 1
+                                if isinstance(result, dict) and "error" in result:
+                                    error_type = result.get("error")
+                                    error_msg = result.get("message", "未知错误")
+                                    
+                                    if error_type == "no_open_order":
+                                        results.append(f"ℹ️ 平仓信号 {i}: {pair} - 无开放订单")
+                                        total_success += 1  # 无订单也算成功
+                                    else:
+                                        results.append(f"❌ 平仓信号 {i}: {pair} - {error_msg}")
+                                        total_error += 1
+                                else:
+                                    results.append(f"✅ 平仓信号 {i}: {pair}")
+                                    total_success += 1
                             else:
-                                results.append(f"❌ 平多仓 {i}: {pair} - 失败")
+                                results.append(f"❌ 平仓信号 {i}: {pair} - 失败")
                                 total_error += 1
                             
                             # 延迟
                             if i < len(long_positions):
                                 await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
                     except Exception as e:
-                        results.append(f"❌ 平多仓 {i}: 错误 - {str(e)[:50]}")
+                        results.append(f"❌ 平仓信号 {i}: 错误 - {str(e)[:50]}")
                         total_error += 1
                 
-                # 轮询直到多仓为0或超时
-                await query.edit_message_text(
-                    f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 等待多仓平仓完成...",
-                    parse_mode='Markdown'
-                )
-                
-                start_time = time.time()
-                timeout = cfg['defaults']['poll_timeout_sec']
-                interval = cfg['defaults']['poll_interval_sec']
-                
-                while time.time() - start_time < timeout:
-                    remaining_positions = long_client.list_positions()
-                    if not remaining_positions:
-                        results.append("✅ 多仓已全部平仓")
-                        break
-                    
-                    await asyncio.sleep(interval)
-                else:
-                    results.append(f"⚠️ 多仓平仓超时 ({timeout}秒)")
+                results.append("✅ 多仓平仓信号发送完成")
                     
             else:
                 results.append("ℹ️ 无多仓持仓")
                 
         except Exception as e:
-            results.append(f"❌ 平多仓失败: {str(e)[:50]}")
+            results.append(f"❌ 发送平仓信号失败: {str(e)[:50]}")
         
         # 第二步：逐个开空仓
         await query.edit_message_text(
@@ -1313,8 +1390,26 @@ async def execute_go_short(query, op_id: str):
                 result = short_client.forceshort(pair, cfg['defaults']['stake'])
                 
                 if result is not None:
-                    results.append(f"✅ 开空仓 {i}/{len(basket)}: {pair}")
-                    total_success += 1
+                    if isinstance(result, dict) and "error" in result:
+                        # 处理特定错误类型
+                        error_type = result.get("error")
+                        error_msg = result.get("message", "未知错误")
+                        
+                        if error_type == "position_exists":
+                            results.append(f"⚠️ 开空仓 {i}/{len(basket)}: {pair} - 持仓已存在")
+                            total_success += 1  # 持仓已存在也算成功
+                        elif error_type == "symbol_not_found":
+                            results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - 交易对不存在")
+                            total_error += 1
+                        elif error_type == "timeout":
+                            results.append(f"⏰ 开空仓 {i}/{len(basket)}: {pair} - 请求超时")
+                            total_error += 1
+                        else:
+                            results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - {error_msg}")
+                            total_error += 1
+                    else:
+                        results.append(f"✅ 开空仓 {i}/{len(basket)}: {pair}")
+                        total_success += 1
                 else:
                     results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - 失败")
                     total_error += 1
