@@ -76,8 +76,9 @@ class FTClient:
             # 处理 4xx/5xx 错误
             if response.status_code >= 400:
                 error_text = response.text[:200] if response.text else f"HTTP {response.status_code}"
-                print(f"HTTP 错误 {response.status_code}: {error_text}")
+                # 只打印 5xx 服务器错误，4xx 客户端错误（如 404）是预期的
                 if response.status_code >= 500:
+                    print(f"HTTP 错误 {response.status_code}: {error_text}")
                     raise Exception(f"服务器错误 {response.status_code}: {error_text}")
                 return None
             
@@ -90,6 +91,81 @@ class FTClient:
         except Exception as e:
             print(f"请求失败 {method} {url}: {e}")
             raise
+    
+    def list_positions(self) -> list:
+        """获取当前持仓列表"""
+        # 根据 Freqtrade API 文档，/status 端点列出所有开放交易
+        result = self._request("GET", "/api/v1/status")
+        if result is not None:
+            # /status 应该直接返回交易列表
+            if isinstance(result, list):
+                return result
+            # 如果是字典，可能包含在某个字段中
+            elif isinstance(result, dict) and "trades" in result:
+                return result["trades"] if isinstance(result["trades"], list) else []
+        return []
+    
+    def cancel_open_orders(self) -> bool:
+        """取消所有开放订单"""
+        # 文档中没有直接的取消所有订单端点，需要逐个取消
+        # 先获取当前持仓，然后逐个取消其开放订单
+        positions = self.list_positions()
+        success = True
+        for trade in positions:
+            if isinstance(trade, dict) and "trade_id" in trade:
+                trade_id = trade["trade_id"]
+                result = self._request("DELETE", f"/api/v1/trades/{trade_id}/open-order")
+                if result is None:
+                    success = False
+        return success
+    
+    def forcebuy(self, pair: str, stake: float) -> Optional[Dict[Any, Any]]:
+        """强制开多仓"""
+        # 使用 /forceenter 端点，side="long" 表示多仓
+        data = {
+            "pair": pair,
+            "side": "long"
+        }
+        return self._request("POST", "/api/v1/forceenter", json=data)
+    
+    def forcesell(self, pair: str) -> Optional[Dict[Any, Any]]:
+        """强制平多仓"""
+        # 需要先找到对应的 trade_id，然后使用 /forceexit
+        positions = self.list_positions()
+        for trade in positions:
+            if (isinstance(trade, dict) and 
+                trade.get("pair") == pair and 
+                not trade.get("is_short", False)):  # 多仓
+                trade_id = trade.get("trade_id")
+                if trade_id:
+                    data = {"tradeid": trade_id}
+                    return self._request("POST", "/api/v1/forceexit", json=data)
+        return None
+    
+    def forceshort(self, pair: str, stake: float) -> Optional[Dict[Any, Any]]:
+        """强制开空仓"""
+        # 使用 /forceenter 端点，side="short" 表示空仓
+        data = {
+            "pair": pair,
+            "side": "short"
+        }
+        return self._request("POST", "/api/v1/forceenter", json=data)
+    
+    def forcecover(self, pair: str) -> Optional[Dict[Any, Any]]:
+        """强制平空仓"""
+        # 需要先找到对应的 trade_id，然后使用 /forceexit
+        positions = self.list_positions()
+        for trade in positions:
+            if (isinstance(trade, dict) and 
+                trade.get("pair") == pair and 
+                trade.get("is_short", False)):  # 空仓
+                trade_id = trade.get("trade_id")
+                if trade_id:
+                    data = {"tradeid": trade_id}
+                    return self._request("POST", "/api/v1/forceexit", json=data)
+        return None
+
+
 
 if __name__ == "__main__":
     # 加载配置
@@ -141,4 +217,141 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"网络错误测试通过: {type(e).__name__}")
     
-    print("boot ok")
+    # 测试 list_positions()
+    print("\n=== list_positions 测试 ===")
+    try:
+        positions = test_client.list_positions()
+        print(f"404 端点测试结果: {positions}")
+    except Exception as e:
+        print(f"list_positions 异常: {e}")
+    
+    # 测试真实实例的 list_positions
+    print("\n=== 真实实例测试 ===")
+    try:
+        long_positions = long_client.list_positions()
+        print(f"Long 实例持仓: {len(long_positions)} 个")
+        if long_positions:
+            print(f"持仓详情: {long_positions[:2]}...")  # 只显示前2个
+    except Exception as e:
+        print(f"Long 实例异常: {e}")
+    
+    try:
+        short_positions = short_client.list_positions()
+        print(f"Short 实例持仓: {len(short_positions)} 个")
+        if short_positions:
+            print(f"持仓详情: {short_positions[:2]}...")  # 只显示前2个
+    except Exception as e:
+        print(f"Short 实例异常: {e}")
+
+# 测试交易方法（逐一测试功能）
+print("\n=== 交易方法详细测试 ===")
+
+# 测试 1: cancel_open_orders()
+print("1. 测试 cancel_open_orders():")
+try:
+    result1 = long_client.cancel_open_orders()
+    print(f"   Long 客户端: {result1}")
+    result2 = short_client.cancel_open_orders()
+    print(f"   Short 客户端: {result2}")
+except Exception as e:
+    print(f"   错误: {e}")
+
+# 测试 2: forcebuy() - 实际调用（使用实际可用的交易对）
+print("\n2. 测试 forcebuy() [实际调用]:")
+try:
+    result = long_client.forcebuy("BNB/USDT:USDT", 50)  # 使用实际可用的交易对
+    print(f"   Long 客户端 forcebuy 结果: {result}")
+except Exception as e:
+    print(f"   Long 客户端 forcebuy 错误: {e}")
+
+# 测试 3: forceshort() - 实际调用（使用实际可用的交易对）
+print("\n3. 测试 forceshort() [实际调用]:")
+try:
+    result = short_client.forceshort("ETH/USDT:USDT", 50)  # 使用不同的交易对避免冲突
+    print(f"   Short 客户端 forceshort 结果: {result}")
+except Exception as e:
+    print(f"   Short 客户端 forceshort 错误: {e}")
+
+# 等待一下让订单处理
+import time
+print("\n   等待 2 秒让订单处理...")
+time.sleep(2)
+
+# 重新获取持仓状态
+print("\n4. 检查新的持仓状态:")
+try:
+    new_long_positions = long_client.list_positions()
+    print(f"   Long 客户端持仓: {len(new_long_positions)} 个")
+    for pos in new_long_positions:
+        pair = pos.get('pair', 'N/A')
+        is_short = pos.get('is_short', False)
+        trade_id = pos.get('trade_id', 'N/A')
+        print(f"     - {pair} ({'空仓' if is_short else '多仓'}, ID: {trade_id})")
+    
+    new_short_positions = short_client.list_positions()
+    print(f"   Short 客户端持仓: {len(new_short_positions)} 个")
+    for pos in new_short_positions:
+        pair = pos.get('pair', 'N/A')
+        is_short = pos.get('is_short', False)
+        trade_id = pos.get('trade_id', 'N/A')
+        print(f"     - {pair} ({'空仓' if is_short else '多仓'}, ID: {trade_id})")
+except Exception as e:
+    print(f"   获取新持仓失败: {e}")
+
+# 测试 5: forcesell() - 实际调用
+print("\n5. 测试 forcesell() [实际调用]:")
+try:
+    new_long_positions = long_client.list_positions()
+    if new_long_positions:
+        # 找到多仓
+        long_trade = None
+        for pos in new_long_positions:
+            if not pos.get('is_short', False):
+                long_trade = pos
+                break
+        
+        if long_trade:
+            test_pair = long_trade.get('pair', 'N/A')
+            result = long_client.forcesell(test_pair)
+            print(f"   Long 客户端 forcesell({test_pair}) 结果: {result}")
+        else:
+            print("   当前无多仓持仓")
+    else:
+        print("   当前无持仓")
+except Exception as e:
+    print(f"   Long 客户端 forcesell 错误: {e}")
+
+# 测试 6: forcecover() - 实际调用
+print("\n6. 测试 forcecover() [实际调用]:")
+try:
+    new_short_positions = short_client.list_positions()
+    if new_short_positions:
+        # 找到空仓
+        short_trade = None
+        for pos in new_short_positions:
+            if pos.get('is_short', False):
+                short_trade = pos
+                break
+        
+        if short_trade:
+            test_pair = short_trade.get('pair', 'N/A')
+            result = short_client.forcecover(test_pair)
+            print(f"   Short 客户端 forcecover({test_pair}) 结果: {result}")
+        else:
+            print("   当前无空仓持仓")
+    else:
+        print("   当前无持仓")
+except Exception as e:
+    print(f"   Short 客户端 forcecover 错误: {e}")
+
+# 测试错误处理
+print("\n7. 测试错误处理:")
+try:
+    test_client = FTClient("http://127.0.0.1:9999", "test", "test")
+    result = test_client.forcebuy("BTC/USDT", 100)
+    print(f"   假地址测试: {result}")
+except Exception as e:
+    print(f"   假地址测试 - 预期错误: {type(e).__name__}")
+
+print("\n=== 交易方法测试完成 ===")
+print("boot ok")
