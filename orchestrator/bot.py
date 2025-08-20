@@ -1,5 +1,6 @@
 import yaml
 import os
+import re
 
 def load_config():
     """加载配置文件"""
@@ -12,6 +13,45 @@ def load_config():
     
     with open(config_file, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
+
+def load_basket() -> list[str]:
+    """加载篮子并做基本校验"""
+    try:
+        with open('watchlist.yml', 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        
+        basket = data.get('basket', [])
+        if not isinstance(basket, list):
+            print("错误：basket 必须是列表")
+            return []
+        
+        # 大写、去重、格式校验
+        validated_basket = []
+        seen = set()
+        
+        for pair in basket:
+            if not isinstance(pair, str):
+                continue
+                
+            # 转换为大写
+            pair_upper = pair.upper()
+            
+            # 去重
+            if pair_upper in seen:
+                continue
+            seen.add(pair_upper)
+            
+            # 格式校验：BASE/QUOTE
+            if re.match(r'^[A-Z0-9]+/[A-Z0-9]+$', pair_upper):
+                validated_basket.append(pair_upper)
+            else:
+                print(f"警告：跳过无效格式的交易对 {pair}")
+        
+        return validated_basket
+        
+    except Exception as e:
+        print(f"错误：加载篮子文件失败 - {e}")
+        return []
 
 if __name__ == "__main__":
     # 加载配置
@@ -28,4 +68,11 @@ if __name__ == "__main__":
     print(f"Short Instance: {config['freqtrade']['short']['base_url']}")
     print(f"Default Stake: {config['defaults']['stake']}")
     print(f"Default Delay: {config['defaults']['delay_ms']}ms")
+    
+    # 加载篮子
+    basket = load_basket()
+    print("\n=== 篮子加载成功 ===")
+    print(f"篮子数量: {len(basket)}")
+    print(f"篮子内容: {basket}")
+    
     print("boot ok")
