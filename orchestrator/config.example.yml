@@ -1,0 +1,21 @@
+telegram:
+  token: "xxxxx:yyyyy"
+  chat_id: -1001234567890
+  topic_id: 4567
+  admins: [111, 222]
+  require_arm: true
+  arm_ttl_minutes: 15
+freqtrade:
+  long:
+    base_url: "http://127.0.0.1:8081/api/v1"
+    user: "u"
+    pass: "p"
+  short:
+    base_url: "http://127.0.0.1:8082/api/v1"
+    user: "u"
+    pass: "p"
+defaults:
+  stake: 200
+  delay_ms: 300
+  poll_timeout_sec: 60
+  poll_interval_sec: 2
