@@ -1,0 +1,415 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Tiny Orchestrator（Telegram 按钮增强版）— MVP 分步构建计划
+
+> 原则：**极小可测**、**单一目标**、**有始有终**、**顺序执行**。  
+> 目标：在 Telegram 指定群/Topic 用中文按钮操作两台 Freqtrade 实例完成 `/basket`、`/basket_set`、`/stake`、`/status`、`/go_long`（确认后执行）、`/go_short`（先平多后开空，确认后执行）、`/flat`（确认后执行），并写入简易审计日志。
+
+---
+
+## Phase 0 · 脚手架
+
+### T0-1 创建项目骨架
+
+**目标**：最小目录与入口可运行  
+**前置**：Python 3.10+  
+**步骤**：
+
+1. 新建目录结构：
+
+orchestrator/
+├─ bot.py
+├─ config.yml
+├─ watchlist.yml
+└─ runtime/
+└─ audit.log (空文件或不创建)
+
+2. 在 `bot.py` 写 `if __name__ == "__main__": print("boot ok")`
+**产出**：可执行入口  
+**测试**：`python bot.py` 输出 `boot ok` 即通过  
+**完成标准**：命令退出码 0 且打印文本正确
+
+---
+
+### T0-2 安装与验证依赖
+
+**目标**：安装最小依赖并验证导入  
+**前置**：T0-1  
+**步骤**：
+
+1. 安装：`pip install python-telegram-bot==21.* httpx pyyaml`  
+2. 在 REPL 测试 `import telegram, httpx, yaml`
+**产出**：可用依赖环境  
+**测试**：无 ImportError 即通过  
+**完成标准**：三包均可导入
+
+---
+
+## Phase 1 · 配置与数据
+
+### T1-1 填写并读取 `config.yml`
+
+**目标**：加载 Telegram 与实例配置  
+**前置**：T0-2  
+**步骤**：
+
+1. 写入示例配置：
+
+```yaml
+telegram:
+  token: "xxxxx:yyyyy"
+  chat_id: -1001234567890
+  topic_id: 4567
+  admins: [111,222]
+  require_arm: true
+  arm_ttl_minutes: 15
+freqtrade:
+  long: { base_url: "http://127.0.0.1:8081/api/v1", user: "u", pass: "p" }
+  short:{ base_url: "http://127.0.0.1:8082/api/v1", user: "u", pass: "p" }
+defaults: { stake: 200, delay_ms: 300, poll_timeout_sec: 60, poll_interval_sec: 2 }
+```
+
+2. 在 `bot.py` 加载并打印关键字段（勿打印 token）
+   **产出**：内存中的配置对象
+   **测试**：`python bot.py` 显示 chat\_id、topic\_id、stake 等
+   **完成标准**：解析成功且字段正确
+
+---
+
+### T1-2 初始化与读取 `watchlist.yml`
+
+**目标**：读取篮子并做基本校验
+**前置**：T1-1
+**步骤**：
+
+1. 写入：
+
+   ```yaml
+   basket: ["BTC/USDT", "ETH/USDT"]
+   ```
+
+2. 在 `bot.py` 提供函数 `load_basket() -> list[str]`：大写、去重、格式 `BASE/QUOTE` 校验
+   **产出**：函数返回合规列表
+   **测试**：在 `bot.py` 打印返回列表
+   **完成标准**：输出为大写不重复的两元素列表
+
+---
+
+## Phase 2 · Freqtrade 迷你客户端
+
+### T2-1 建立 HTTP 客户端骨架
+
+**目标**：可创建 long/short 两个客户端
+**前置**：T1-1
+**步骤**：
+
+1. 在 `bot.py` 内定义类 `FTClient(base_url, user, passwd)`，保存会话
+2. 添加通用 `_request(method, path, json=None)`，打印 4xx/5xx 文本
+   **产出**：可实例化的客户端对象
+   **测试**：创建两个实例并调用不存在路径，能看到清晰错误
+   **完成标准**：实例化成功且错误可读
+
+---
+
+### T2-2 实现 `list_positions()`（404→空列表）
+
+**目标**：只读探活
+**前置**：T2-1
+**步骤**：
+
+1. 在 `list_positions()` 尝试 `GET /positions`；若 404 再试 `GET /trades`；仍 404→返回 `[]`
+2. 其他错误抛异常
+   **产出**：返回列表或 `[]`
+   **测试**：指向假地址捕获异常；指向 dry-run（若有）返回 JSON/\[]
+   **完成标准**：三种分支可用
+
+---
+
+### T2-3 实现下单/平仓/取消端点
+
+**目标**：提供 5 个方法（仅签名及简单请求）
+**前置**：T2-2
+**步骤**：
+
+1. `cancel_open_orders()`：尝试 `DELETE /orders/open` 或 `POST /cancel/all`
+2. `forcebuy(pair, stake)`：尝试 `POST /forcebuy` 或 `/buy/force`
+3. `forcesell(pair)`：尝试 `POST /forcesell` 或 `/sell/force`
+4. `forceshort(pair, stake)`：尝试 `POST /forceshort` 或 `/short/force`
+5. `forcecover(pair)`：尝试 `POST /forcecover` 或 `/cover/force`
+   （遇 404 继续尝试下一别名；首个成功即返回）
+   **产出**：5 方法可调用（实际可失败）
+   **测试**：各方法对假地址抛异常，信息包含路径
+   **完成标准**：方法存在且可调用
+
+---
+
+## Phase 3 · Telegram 入口（仅 Topic 内）
+
+### T3-1 启动 Bot 并过滤 chat/topic
+
+**目标**：仅在目标群/Topic 响应
+**前置**：T1-1
+**步骤**：
+
+1. 使用 `python-telegram-bot` 启动 `Application`
+2. 在消息处理前校验 `chat_id` 与 `message_thread_id`
+3. 非目标消息直接忽略
+   **产出**：最小可运行 Bot
+   **测试**：在目标 Topic 发送任意消息 → 回“pong”；其他地方无响应
+   **完成标准**：过滤准确
+
+---
+
+### T3-2 管理员校验与 `/arm` 占位
+
+**目标**：限制交易类命令权限
+**前置**：T3-1
+**步骤**：
+
+1. 实现 `is_admin(user_id) -> bool`
+2. `require_arm=true` 时，新增 `/arm <pass>`：在内存记录“武装到期时间”
+3. 提供 `is_armed() -> bool` 校验
+   **产出**：权限与武装开关
+   **测试**：非 admin 执行交易命令返回“无权限”；未武装提示“请先 /arm”
+   **完成标准**：控制逻辑生效
+
+---
+
+## Phase 4 · 只读与维护命令
+
+### T4-1 `/basket` 命令
+
+**目标**：展示当前篮子与参数
+**前置**：T3-1、T1-2
+**步骤**：
+
+1. 回复文本：篮子数量与列表、stake、delay\_ms
+   **产出**：可读面板
+   **测试**：在 Topic 输入 `/basket`，显示正确
+   **完成标准**：字段完整
+
+---
+
+### T4-2 `/basket_set` 命令
+
+**目标**：覆盖写入篮子
+**前置**：T4-1
+**步骤**：
+
+1. 解析参数对 `watchlist.yml` 覆盖写入（保持大写、去重、格式校验）
+2. 回复新篮子摘要
+   **产出**：更新后的篮子文件
+   **测试**：`/basket_set sol/usdt btc/usdt BTC/USDT` → `/basket` 不重复且全大写
+   **完成标准**：覆盖成功且回显正确
+
+---
+
+### T4-3 `/stake` 命令
+
+**目标**：更新每笔名义（仅内存）
+**前置**：T4-1
+**步骤**：
+
+1. 解析整数并更新内存 `stake`（可选写回 config）
+2. `/basket` 或 `/status` 能看到更新值
+   **产出**：新 stake 生效
+   **测试**：`/stake 300` → `/basket` 显示 300
+   **完成标准**：数值正确
+
+---
+
+### T4-4 `/status` 命令（探活）
+
+**目标**：显示 long/short 探活与最近摘要
+**前置**：T2-2
+**步骤**：
+
+1. 各对 `list_positions()` 一次，成功记 `ok`，异常记 `fail`
+2. 回复：ok/fail 与最近一次执行的内存摘要（若无则显示“无”）
+   **产出**：状态文本
+   **测试**：断网模拟 fail；恢复后 ok
+   **完成标准**：状态与摘要显示
+
+---
+
+## Phase 5 · 中文确认卡片与回调
+
+### T5-1 渲染“确认卡片”（InlineKeyboard）
+
+**目标**：为 `go_long/go_short/flat` 生成中文按钮
+**前置**：T3-1
+**步骤**：
+
+1. 函数 `render_confirm_card(cmd, N, stake, delay_ms, extra_note=None)`
+2. 按钮：✅确认 / ❌取消；可附“每笔 100/200/300”“延时 200/300/500ms”按钮
+3. `callback_data` 形如：`GL|CONFIRM|<op_id>|stake=200;delay=300`
+   **产出**：可发送的卡片
+   **测试**：在 `/go_long` 时先仅发送卡片（不执行），按钮可见
+   **完成标准**：卡片展示正确
+
+---
+
+### T5-2 回调处理器（幂等与权限）
+
+**目标**：统一解析回调并二次校验
+**前置**：T5-1、T3-2
+**步骤**：
+
+1. `on_callback_query()`：解析 `<OP>|<ACTION>|<OP_ID>|KV`
+2. 校验：admins、topic、武装；`OP_ID` 幂等（内存集合记录已执行）
+3. `SET_STAKE/SET_DELAY` 更新本次操作的临时参数并 **编辑原消息** 更新标题
+4. `CONFIRM` 进入对应执行流程；`CANCEL` 仅提示“已取消”
+   **产出**：安全回调执行器
+   **测试**：重复点“确认”只执行一次；非管理员点按钮被拒绝
+   **完成标准**：幂等与权限生效
+
+---
+
+## Phase 6 · 执行：开多 / 平仓 / 反向
+
+### T6-1 `/go_long`：确认→串行开多
+
+**目标**：长侧逐个 `forcebuy`
+**前置**：T5-2、T1-2、T2-3
+**步骤**：
+
+1. `/go_long` 仅发送卡片，待 `CONFIRM` 后：
+
+   * 读取篮子与当前 stake/delay
+   * 逐个 `forcebuy(pair, stake)`；间隔 `delay_ms`
+   * 记录 `ok/err` 列表
+2. 在同一 Topic 发送进度与汇总；内存保存 `last_summary`；写 `runtime/audit.log`
+   **产出**：下单结果与审计
+   **测试**：dry-run 实例观察多笔订单；混入错误对，汇总显示失败项
+   **完成标准**：成功与失败统计准确，日志追加成功
+
+---
+
+### T6-2 `/flat`：确认→两侧全平
+
+**目标**：取消挂单并清仓
+**前置**：T6-1
+**步骤**：
+
+1. `CONFIRM` 后：
+
+   * short：`cancel_open_orders()` → `list_positions()` → 逐个 `forcecover`
+   * long ：`cancel_open_orders()` → `list_positions()` → 逐个 `forcesell`
+   * 逐笔间隔 `delay_ms`；收集 `ok/err`
+2. 发送汇总与写审计
+   **产出**：两侧 0 仓
+   **测试**：先 `/go_long` 再 `/flat`；前端仓位为 0
+   **完成标准**：无持仓且汇总正确
+
+---
+
+### T6-3 `/go_short`：确认→先平多后开空
+
+**目标**：强顺序反向
+**前置**：T6-2
+**步骤**：
+
+1. `CONFIRM` 后：
+
+   * long 侧：`cancel_open_orders()` → `forcesell` 全部 → 轮询 `list_positions()` 直至 0 或超时（`poll_timeout_sec`，间隔 `poll_interval_sec`）
+   * short 侧：逐个 `forceshort(pair, stake)`；间隔 `delay_ms`
+2. 发送进度/汇总并写审计
+   **产出**：多侧清空，空侧建仓
+   **测试**：先 `/go_long`，随后 `/go_short`；验证顺序正确
+   **完成标准**：先平后开，统计与日志正确
+
+---
+
+## Phase 7 · 体验与安全打磨
+
+### T7-1 进度消息线程化
+
+**目标**：每笔子消息 + 最终汇总
+**前置**：T6-1
+**步骤**：
+
+1. 执行时发送“开始”消息，并对每笔追加 `[i/N] pair → ✅/❌(原因)`
+2. 结束时追加“汇总”消息
+   **产出**：可视化过程
+   **测试**：执行 `/go_long` 时能看到逐条消息
+   **完成标准**：序号与成功/失败一致
+
+---
+
+### T7-2 失败摘要与查看全部
+
+**目标**：汇总仅展示前 2 条失败，提供“查看全部”按钮
+**前置**：T7-1
+**步骤**：
+
+1. 汇总文本仅列出前 2 条
+2. 提供按钮 `📄 查看全部错误`（回调后回复完整失败列表）
+   **产出**：更友好的结果呈现
+   **测试**：构造 3 条失败，汇总显示 2 条，按钮查看完整
+   **完成标准**：符合预期
+
+---
+
+### T7-3 `/status` 增强（最近一次摘要）
+
+**目标**：展示 `last_summary`（内存）
+**前置**：T6-1
+**步骤**：
+
+1. `/status` 增加“最近一次：cmd、成功/失败、耗时秒”
+   **产出**：更全状态
+   **测试**：执行一次 `/go_long` 后 `/status` 可见摘要
+   **完成标准**：字段正确
+
+---
+
+## Phase 8 · 审计与回归
+
+### T8-1 审计日志 NDJSON
+
+**目标**：命令开始/动作级/结束写入 `runtime/audit.log`
+**前置**：T6-1
+**步骤**：
+
+1. 定义写函数：`append_audit(record: dict)`
+2. 在三处调用：命令触发、单笔动作、命令结束
+   **产出**：日志文件
+   **测试**：执行 `/go_long`，用 `tail -n` 检查三类记录存在且 JSON 可解析
+   **完成标准**：字段完整、数量匹配
+
+---
+
+### T8-2 负面用例回归
+
+**目标**：确保边界场景稳定
+**前置**：T6-3
+**步骤**（逐条验证）：
+
+1. 非 admin 点击按钮 → 被拒
+2. 错误 Topic 点击按钮 → 无响应或被拒
+3. 未武装 `require_arm=true` → 不执行
+4. 断网时 `/status` 显示 fail，不崩溃
+5. 篮子含 1 个无效对 → 执行显示失败项，其他继续
+   **产出**：用例清单与验证结果
+   **测试**：逐条截图/记录
+   **完成标准**：全部通过
+
+---
+
+## Phase 9 · 交付与运行手册
+
+### T9-1 运行说明（README）
+
+**目标**：最小上手文档
+**前置**：全部
+**步骤**：
+
+1. 在 `README.md` 写明：依赖安装、配置样例、dry-run 自检、命令清单、常见错误
+   **产出**：README 文档
+   **测试**：按文档重置环境跑通 `/basket`→`/go_long`→`/flat`
+   **完成标准**：第三人 30 分钟内可跑通
+
+---
