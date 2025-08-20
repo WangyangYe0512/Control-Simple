@@ -2,6 +2,7 @@ import yaml
 import os
 import re
 import httpx
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -168,6 +169,43 @@ class FTClient:
         return None
 
 
+# 权限控制和武装机制
+armed_until = None  # 武装到期时间
+
+def is_admin(user_id: int) -> bool:
+    """检查用户是否为管理员"""
+    cfg = load_config()  # 每次调用时重新加载配置
+    return user_id in cfg['telegram']['admins']
+
+def is_armed() -> bool:
+    """检查系统是否已武装"""
+    global armed_until
+    cfg = load_config()  # 每次调用时重新加载配置
+    if not cfg['telegram']['require_arm']:
+        return True  # 如果不需要武装，直接返回 True
+    
+    if armed_until is None:
+        return False
+    
+    return datetime.now() < armed_until
+
+def arm_system() -> timedelta:
+    """武装系统，返回剩余时间"""
+    global armed_until
+    cfg = load_config()  # 每次调用时重新加载配置
+    ttl_minutes = cfg['telegram']['arm_ttl_minutes']
+    armed_until = datetime.now() + timedelta(minutes=ttl_minutes)
+    return timedelta(minutes=ttl_minutes)
+
+def get_remaining_arm_time() -> Optional[timedelta]:
+    """获取武装剩余时间"""
+    global armed_until
+    if armed_until is None:
+        return None
+    
+    remaining = armed_until - datetime.now()
+    return remaining if remaining.total_seconds() > 0 else None
+
 
 if __name__ == "__main__":
     # 加载配置
@@ -231,7 +269,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /help 命令"""
-    help_text = """
+    arm_status = ""
+    if config['telegram']['require_arm']:
+        if is_armed():
+            remaining = get_remaining_arm_time()
+            if remaining:
+                minutes = int(remaining.total_seconds() // 60)
+                arm_status = f"\n🔓 **当前状态：已武装** (剩余 {minutes} 分钟)"
+            else:
+                arm_status = "\n🔒 **当前状态：未武装**"
+        else:
+            arm_status = "\n🔒 **当前状态：未武装**"
+    else:
+        arm_status = "\n🔓 **武装机制：已禁用**"
+    
+    help_text = f"""
 🤖 **Tiny Orchestrator 命令列表**
 
 📊 **查看命令：**
@@ -249,11 +301,61 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🔐 **安全命令：**
 • `/arm <pass>` - 武装系统（如启用）
+{arm_status}
 
 ---
 *仅管理员可在指定 Topic 内使用交易命令*
     """
     await update.message.reply_text(help_text, parse_mode='Markdown')
+
+async def arm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /arm 命令"""
+    # 检查是否在目标群组和 Topic
+    if update.message.chat.id != config['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != config['telegram']['topic_id']:
+        return
+    
+    # 检查是否为管理员
+    if not is_admin(update.message.from_user.id):
+        await update.message.reply_text("⛔ 无权限：仅管理员可以武装系统")
+        return
+    
+    # 检查是否启用武装机制
+    if not config['telegram']['require_arm']:
+        await update.message.reply_text("ℹ️ 武装机制已禁用，无需武装即可执行交易命令")
+        return
+    
+    # 检查参数
+    if not context.args:
+        remaining = get_remaining_arm_time()
+        if remaining:
+            minutes = int(remaining.total_seconds() // 60)
+            await update.message.reply_text(f"🔓 系统已武装，剩余时间：{minutes} 分钟")
+        else:
+            await update.message.reply_text("🔒 系统未武装\n使用：`/arm <密码>` 来武装系统", parse_mode='Markdown')
+        return
+    
+    # 简单的密码验证（这里可以根据需要增强）
+    password = " ".join(context.args)
+    if password == "confirm":  # 简单的固定密码，实际使用时可以配置
+        ttl = arm_system()
+        minutes = int(ttl.total_seconds() // 60)
+        await update.message.reply_text(f"✅ 系统已武装 {minutes} 分钟\n可以执行交易命令")
+    else:
+        await update.message.reply_text("❌ 密码错误")
+
+def check_permission(user_id: int) -> tuple[bool, str]:
+    """检查用户权限和武装状态"""
+    # 检查管理员权限
+    if not is_admin(user_id):
+        return False, "⛔ 无权限：仅管理员可以执行交易命令"
+    
+    # 检查武装状态
+    if not is_armed():
+        return False, "🔒 系统未武装，请先使用 `/arm <密码>` 武装系统"
+    
+    return True, ""
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理所有消息，过滤 chat/topic"""
@@ -280,6 +382,7 @@ def run_telegram_bot():
     # 添加处理器
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("arm", arm_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # 添加错误处理
