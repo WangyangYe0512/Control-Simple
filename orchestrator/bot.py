@@ -367,7 +367,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/status` - 显示实例状态与最近摘要
 
 ⚙️ **设置命令：**
-• `/basket_set <pairs...>` - 设置篮子
+• `/basket_set <pairs...>` - 设置篮子 (别名: `/bs`)
 • `/stake <amount>` - 设置每笔名义
 
 🚀 **交易命令：**
@@ -1829,6 +1829,7 @@ def run_telegram_bot():
     application.add_handler(CommandHandler("basket", basket_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("basket_set", basket_set_command))
+    application.add_handler(CommandHandler("bs", basket_set_command))
     application.add_handler(CommandHandler("stake", stake_command))
     application.add_handler(CommandHandler("go_long", go_long_command))
     application.add_handler(CommandHandler("flat", flat_command))
