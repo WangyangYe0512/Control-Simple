@@ -269,19 +269,19 @@ def get_remaining_arm_time() -> Optional[timedelta]:
 
 if __name__ == "__main__":
     # 加载配置
-    config = load_config()
+    cfg = load_config()
     
     # 打印关键字段（不打印 token）
     print("=== 配置加载成功 ===")
-    print(f"Chat ID: {config['telegram']['chat_id']}")
-    print(f"Topic ID: {config['telegram']['topic_id']}")
-    print(f"Admins: {config['telegram']['admins']}")
-    print(f"Require Arm: {config['telegram']['require_arm']}")
-    print(f"Arm TTL: {config['telegram']['arm_ttl_minutes']} minutes")
-    print(f"Long Instance: {config['freqtrade']['long']['base_url']}")
-    print(f"Short Instance: {config['freqtrade']['short']['base_url']}")
-    print(f"Default Stake: {config['defaults']['stake']}")
-    print(f"Default Delay: {config['defaults']['delay_ms']}ms")
+    print(f"Chat ID: {cfg['telegram']['chat_id']}")
+    print(f"Topic ID: {cfg['telegram']['topic_id']}")
+    print(f"Admins: {cfg['telegram']['admins']}")
+    print(f"Require Arm: {cfg['telegram']['require_arm']}")
+    print(f"Arm TTL: {cfg['telegram']['arm_ttl_minutes']} minutes")
+    print(f"Long Instance: {cfg['freqtrade']['long']['base_url']}")
+    print(f"Short Instance: {cfg['freqtrade']['short']['base_url']}")
+    print(f"Default Stake: {cfg['defaults']['stake']}")
+    print(f"Default Delay: {cfg['defaults']['delay_ms']}ms")
     
     # 加载篮子
     basket = load_basket()
@@ -292,14 +292,14 @@ if __name__ == "__main__":
     # 创建客户端实例
     print("\n=== 客户端测试 ===")
     long_client = FTClient(
-        config['freqtrade']['long']['base_url'],
-        config['freqtrade']['long']['user'],
-        config['freqtrade']['long']['pass']
+        cfg['freqtrade']['long']['base_url'],
+        cfg['freqtrade']['long']['user'],
+        cfg['freqtrade']['long']['pass']
     )
     short_client = FTClient(
-        config['freqtrade']['short']['base_url'],
-        config['freqtrade']['short']['user'],
-        config['freqtrade']['short']['pass']
+        cfg['freqtrade']['short']['base_url'],
+        cfg['freqtrade']['short']['user'],
+        cfg['freqtrade']['short']['pass']
     )
     
     print(f"Long 客户端: {long_client.base_url}")
@@ -311,16 +311,16 @@ if __name__ == "__main__":
 print("\n=== 启动 Telegram Bot ===")
 
 # 全局变量
-config = load_config()
+cfg = load_config()
 long_client = FTClient(
-    config['freqtrade']['long']['base_url'],
-    config['freqtrade']['long']['user'],
-    config['freqtrade']['long']['pass']
+    cfg['freqtrade']['long']['base_url'],
+    cfg['freqtrade']['long']['user'],
+    cfg['freqtrade']['long']['pass']
 )
 short_client = FTClient(
-    config['freqtrade']['short']['base_url'],
-    config['freqtrade']['short']['user'],
-    config['freqtrade']['short']['pass']
+    cfg['freqtrade']['short']['base_url'],
+    cfg['freqtrade']['short']['user'],
+    cfg['freqtrade']['short']['pass']
 )
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -329,8 +329,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /help 命令"""
+    cfg = load_config()
     arm_status = ""
-    if config['telegram']['require_arm']:
+    if cfg['telegram']['require_arm']:
         if is_armed():
             remaining = get_remaining_arm_time()
             if remaining:
@@ -371,9 +372,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def arm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /arm 命令"""
     # 检查是否在目标群组和 Topic
-    if update.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
         return
-    if update.message.message_thread_id != config['telegram']['topic_id']:
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
         return
     
     # 检查是否为管理员
@@ -409,9 +411,10 @@ async def arm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def basket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /basket 命令"""
     # 检查是否在目标群组和 Topic
-    if update.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
         return
-    if update.message.message_thread_id != config['telegram']['topic_id']:
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
         return
     
     try:
@@ -427,7 +430,7 @@ async def basket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if basket:
             message += f"🛒 **篮子内容** ({len(basket)} 个交易对):\n"
             for i, pair in enumerate(basket, 1):
-                message += f"  {i}. `{pair}`\n"
+                message += f"  {i}. {pair}\n"
         else:
             message += "🛒 **篮子内容**: 空\n"
         
@@ -440,7 +443,12 @@ async def basket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # 创建内联键盘
         keyboard = [
-            [InlineKeyboardButton("🔄 刷新", callback_data="refresh_basket")]
+            [InlineKeyboardButton("🔄 刷新", callback_data="refresh_basket")],
+            [
+                InlineKeyboardButton("🚀 开多", callback_data="QUICK_GO_LONG"),
+                InlineKeyboardButton("🔴 开空", callback_data="QUICK_GO_SHORT"),
+                InlineKeyboardButton("🚫 全平", callback_data="QUICK_FLAT")
+            ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -452,9 +460,10 @@ async def basket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /status 命令"""
     # 检查是否在目标群组和 Topic
-    if update.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
         return
-    if update.message.message_thread_id != config['telegram']['topic_id']:
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
         return
     
     try:
@@ -548,9 +557,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def basket_set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /basket_set 命令"""
     # 检查是否在目标群组和 Topic
-    if update.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
         return
-    if update.message.message_thread_id != config['telegram']['topic_id']:
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
         return
     
     # 检查权限
@@ -621,9 +631,10 @@ async def basket_set_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def stake_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /stake 命令"""
     # 检查是否在目标群组和 Topic
-    if update.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
         return
-    if update.message.message_thread_id != config['telegram']['topic_id']:
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
         return
     
     # 检查权限
@@ -689,12 +700,38 @@ async def stake_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 全局变量用于幂等控制
 executed_operations = set()  # 记录已执行的操作ID
 
+async def safe_edit_message(query, message: str, parse_mode='Markdown'):
+    """安全的消息编辑函数，处理 Markdown 解析错误"""
+    try:
+        # 清理可能导致 Markdown 解析问题的字符
+        safe_message = message.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]')
+        safe_message = safe_message.replace('(', '\\(').replace(')', '\\)').replace('~', '\\~')
+        safe_message = safe_message.replace('`', '\\`').replace('>', '\\>').replace('#', '\\#')
+        safe_message = safe_message.replace('+', '\\+').replace('-', '\\-').replace('=', '\\=')
+        safe_message = safe_message.replace('|', '\\|').replace('{', '\\{').replace('}', '\\}')
+        safe_message = safe_message.replace('.', '\\.').replace('!', '\\!')
+        
+        await query.edit_message_text(safe_message, parse_mode=parse_mode)
+    except Exception as e:
+        if "can't parse entities" in str(e) or "can't find end of the entity" in str(e):
+            # 如果 Markdown 解析失败，使用纯文本
+            try:
+                # 移除所有 Markdown 标记
+                plain_message = message.replace('**', '').replace('*', '').replace('`', '')
+                await query.edit_message_text(plain_message, parse_mode=None)
+            except:
+                # 最后的备选方案：只显示简单消息
+                await query.edit_message_text("操作完成", parse_mode=None)
+        else:
+            raise e
+
 async def go_long_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /go_long 命令"""
     # 检查是否在目标群组和 Topic
-    if update.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
         return
-    if update.message.message_thread_id != config['telegram']['topic_id']:
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
         return
     
     # 检查权限
@@ -705,7 +742,6 @@ async def go_long_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # 加载配置和篮子
-        cfg = load_config()
         basket = load_basket()
         
         if not basket:
@@ -726,7 +762,7 @@ async def go_long_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         message += "🛒 **交易对列表**:\n"
         for i, pair in enumerate(basket, 1):
-            message += f"  {i}. `{pair}`\n"
+            message += f"  {i}. {pair}\n"
         
         message += "\n⚠️ **确认后将执行开多操作**"
         
@@ -747,9 +783,10 @@ async def go_long_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def flat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /flat 命令"""
     # 检查是否在目标群组和 Topic
-    if update.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
         return
-    if update.message.message_thread_id != config['telegram']['topic_id']:
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
         return
     
     # 检查权限
@@ -789,9 +826,10 @@ async def flat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def go_short_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /go_short 命令"""
     # 检查是否在目标群组和 Topic
-    if update.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
         return
-    if update.message.message_thread_id != config['telegram']['topic_id']:
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
         return
     
     # 检查权限
@@ -826,7 +864,7 @@ async def go_short_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         message += "🛒 **交易对列表**:\n"
         for i, pair in enumerate(basket, 1):
-            message += f"  {i}. `{pair}`\n"
+            message += f"  {i}. {pair}\n"
         
         message += "\n⚠️ **确认后将执行反向操作（先平多后开空）**"
         
@@ -850,9 +888,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()  # 立即响应回调
     
     # 检查是否在目标群组和 Topic
-    if query.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()  # 重新加载配置
+    if query.message.chat.id != cfg['telegram']['chat_id']:
         return
-    if query.message.message_thread_id != config['telegram']['topic_id']:
+    if query.message.message_thread_id != cfg['telegram']['topic_id']:
         return
     
     try:
@@ -868,7 +907,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if basket:
                 message += f"🛒 **篮子内容** ({len(basket)} 个交易对):\n"
                 for i, pair in enumerate(basket, 1):
-                    message += f"  {i}. `{pair}`\n"
+                    message += f"  {i}. {pair}\n"
             else:
                 message += "🛒 **篮子内容**: 空\n"
             
@@ -879,7 +918,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"  • 轮询间隔: `{cfg['defaults']['poll_interval_sec']}` 秒\n"
             
             keyboard = [
-                [InlineKeyboardButton("🔄 刷新", callback_data="refresh_basket")]
+                [InlineKeyboardButton("🔄 刷新", callback_data="refresh_basket")],
+                [
+                    InlineKeyboardButton("🚀 开多", callback_data="QUICK_GO_LONG"),
+                    InlineKeyboardButton("🔴 开空", callback_data="QUICK_GO_SHORT"),
+                    InlineKeyboardButton("🚫 全平", callback_data="QUICK_FLAT")
+                ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -982,6 +1026,73 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     raise e
             
+        # 处理快速操作回调
+        elif query.data.startswith("QUICK_"):
+            
+            # 检查权限
+            has_permission, error_msg = check_permission(query.from_user.id)
+            if not has_permission:
+                await query.answer(error_msg, show_alert=True)
+                return
+            
+            # 检查篮子是否为空
+            basket = load_basket()
+            if not basket:
+                await query.answer("❌ 篮子为空，无法执行操作", show_alert=True)
+                return
+            
+            if query.data == "QUICK_GO_LONG":
+                # 快速开多 - 直接调用原有的命令函数
+                await query.answer("🚀 正在创建开多确认...", show_alert=False)
+                try:
+                    # 创建一个模拟的 Update 对象来调用原有函数
+                    fake_message = type('FakeMessage', (), {
+                        'chat': query.message.chat,
+                        'message_thread_id': query.message.message_thread_id,
+                        'from_user': query.from_user,
+                        'reply_text': query.message.reply_text  # 添加 reply_text 方法
+                    })()
+                    fake_update = type('FakeUpdate', (), {
+                        'message': fake_message
+                    })()
+                    await go_long_command(fake_update, context)
+                except Exception as e:
+                    await query.answer(f"❌ 创建确认失败: {str(e)}", show_alert=True)
+            elif query.data == "QUICK_GO_SHORT":
+                # 快速开空 - 直接调用原有的命令函数
+                await query.answer("🔴 正在创建开空确认...", show_alert=False)
+                try:
+                    fake_message = type('FakeMessage', (), {
+                        'chat': query.message.chat,
+                        'message_thread_id': query.message.message_thread_id,
+                        'from_user': query.from_user,
+                        'reply_text': query.message.reply_text  # 添加 reply_text 方法
+                    })()
+                    fake_update = type('FakeUpdate', (), {
+                        'message': fake_message
+                    })()
+                    await go_short_command(fake_update, context)
+                except Exception as e:
+                    await query.answer(f"❌ 创建确认失败: {str(e)}", show_alert=True)
+            elif query.data == "QUICK_FLAT":
+                # 快速全平 - 直接调用原有的命令函数
+                await query.answer("🚫 正在创建全平确认...", show_alert=False)
+                try:
+                    fake_message = type('FakeMessage', (), {
+                        'chat': query.message.chat,
+                        'message_thread_id': query.message.message_thread_id,
+                        'from_user': query.from_user,
+                        'reply_text': query.message.reply_text  # 添加 reply_text 方法
+                    })()
+                    fake_update = type('FakeUpdate', (), {
+                        'message': fake_message
+                    })()
+                    await flat_command(fake_update, context)
+                except Exception as e:
+                    await query.answer(f"❌ 创建确认失败: {str(e)}", show_alert=True)
+            else:
+                await query.answer("❌ 未知操作", show_alert=True)
+        
         # 处理交易命令回调
         elif query.data.startswith("CONFIRM|") or query.data.startswith("CANCEL|"):
             # 解析回调数据
@@ -1047,9 +1158,9 @@ async def execute_go_long(query, op_id: str):
         )
         
         # 更新确认消息为执行中
-        await query.edit_message_text(
-            f"🚀 **开多执行中** (ID: {op_id})\n\n⏳ 正在执行开多操作...",
-            parse_mode='Markdown'
+        await safe_edit_message(
+            query,
+            f"🚀 **开多执行中** (ID: {op_id})\n\n⏳ 正在执行开多操作..."
         )
         
         # 执行开多操作
@@ -1069,22 +1180,22 @@ async def execute_go_long(query, op_id: str):
                         error_msg = result.get("message", "未知错误")
                         
                         if error_type == "position_exists":
-                            results.append(f"⚠️ {i}/{len(basket)} `{pair}` - 持仓已存在")
+                            results.append(f"⚠️ {i}/{len(basket)} {pair} - 持仓已存在")
                             success_count += 1  # 持仓已存在也算成功
                         elif error_type == "symbol_not_found":
-                            results.append(f"❌ {i}/{len(basket)} `{pair}` - 交易对不存在")
+                            results.append(f"❌ {i}/{len(basket)} {pair} - 交易对不存在")
                             error_count += 1
                         elif error_type == "timeout":
-                            results.append(f"⏰ {i}/{len(basket)} `{pair}` - 请求超时")
+                            results.append(f"⏰ {i}/{len(basket)} {pair} - 请求超时")
                             error_count += 1
                         else:
-                            results.append(f"❌ {i}/{len(basket)} `{pair}` - {error_msg}")
+                            results.append(f"❌ {i}/{len(basket)} {pair} - {error_msg}")
                             error_count += 1
                     else:
-                        results.append(f"✅ {i}/{len(basket)} `{pair}` - 开多成功")
+                        results.append(f"✅ {i}/{len(basket)} {pair} - 开多成功")
                         success_count += 1
                 else:
-                    results.append(f"❌ {i}/{len(basket)} `{pair}` - 开多失败")
+                    results.append(f"❌ {i}/{len(basket)} {pair} - 开多失败")
                     error_count += 1
                 
                 # 延迟
@@ -1092,7 +1203,7 @@ async def execute_go_long(query, op_id: str):
                     await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
                     
             except Exception as e:
-                results.append(f"❌ {i}/{len(basket)} `{pair}` - 错误: {str(e)[:50]}")
+                results.append(f"❌ {i}/{len(basket)} {pair} - 错误: {str(e)[:50]}")
                 error_count += 1
         
         # 构建结果消息
@@ -1114,7 +1225,14 @@ async def execute_go_long(query, op_id: str):
         current_time = datetime.now().strftime("%H:%M:%S")
         message += f"\n⏰ 完成时间: {current_time}"
         
-        await query.edit_message_text(message, parse_mode='Markdown')
+        try:
+            await query.edit_message_text(message, parse_mode='Markdown')
+        except Exception as e:
+            if "can't parse entities" in str(e):
+                # 如果 Markdown 解析失败，尝试不使用 Markdown
+                await query.edit_message_text(message, parse_mode=None)
+            else:
+                raise e
         
         # 写入审计日志
         audit_log = f"[{datetime.now().isoformat()}] GO_LONG {op_id} - Success: {success_count}, Failed: {error_count}, Total: {len(basket)}\n"
@@ -1126,7 +1244,7 @@ async def execute_go_long(query, op_id: str):
             print(f"写入审计日志失败: {e}")
         
     except Exception as e:
-        await query.edit_message_text(f"❌ **开多执行失败** (ID: {op_id})\n\n错误: {str(e)}", parse_mode='Markdown')
+        await safe_edit_message(query, f"❌ **开多执行失败** (ID: {op_id})\n\n错误: {str(e)}")
 
 async def execute_flat(query, op_id: str):
     """执行全平操作"""
@@ -1281,7 +1399,14 @@ async def execute_flat(query, op_id: str):
         current_time = datetime.now().strftime("%H:%M:%S")
         message += f"\n⏰ 完成时间: {current_time}"
         
-        await query.edit_message_text(message, parse_mode='Markdown')
+        try:
+            await query.edit_message_text(message, parse_mode='Markdown')
+        except Exception as e:
+            if "can't parse entities" in str(e):
+                # 如果 Markdown 解析失败，尝试不使用 Markdown
+                await query.edit_message_text(message, parse_mode=None)
+            else:
+                raise e
         
         # 写入审计日志
         audit_log = f"[{datetime.now().isoformat()}] FLAT {op_id} - Success: {total_success}, Failed: {total_error}, Total: {total_success + total_error}\n"
@@ -1293,7 +1418,7 @@ async def execute_flat(query, op_id: str):
             print(f"写入审计日志失败: {e}")
         
     except Exception as e:
-        await query.edit_message_text(f"❌ **全平执行失败** (ID: {op_id})\n\n错误: {str(e)}", parse_mode='Markdown')
+        await safe_edit_message(query, f"❌ **全平执行失败** (ID: {op_id})\n\n错误: {str(e)}")
 
 async def execute_go_short(query, op_id: str):
     """执行开空操作（先平多后开空）"""
@@ -1441,7 +1566,14 @@ async def execute_go_short(query, op_id: str):
         current_time = datetime.now().strftime("%H:%M:%S")
         message += f"\n⏰ 完成时间: {current_time}"
         
-        await query.edit_message_text(message, parse_mode='Markdown')
+        try:
+            await query.edit_message_text(message, parse_mode='Markdown')
+        except Exception as e:
+            if "can't parse entities" in str(e):
+                # 如果 Markdown 解析失败，尝试不使用 Markdown
+                await query.edit_message_text(message, parse_mode=None)
+            else:
+                raise e
         
         # 写入审计日志
         audit_log = f"[{datetime.now().isoformat()}] GO_SHORT {op_id} - Success: {total_success}, Failed: {total_error}, Total: {total_success + total_error}\n"
@@ -1453,7 +1585,9 @@ async def execute_go_short(query, op_id: str):
             print(f"写入审计日志失败: {e}")
         
     except Exception as e:
-        await query.edit_message_text(f"❌ **开空执行失败** (ID: {op_id})\n\n错误: {str(e)}", parse_mode='Markdown')
+        await safe_edit_message(query, f"❌ **开空执行失败** (ID: {op_id})\n\n错误: {str(e)}")
+
+# 已删除 quick_* 函数，直接复用原有的命令函数
 
 def check_permission(user_id: int) -> tuple[bool, str]:
     """检查用户权限和武装状态"""
@@ -1470,11 +1604,12 @@ def check_permission(user_id: int) -> tuple[bool, str]:
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理所有消息，过滤 chat/topic"""
     # 检查是否在目标群组
-    if update.message.chat.id != config['telegram']['chat_id']:
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
         return  # 忽略非目标群组
     
     # 检查是否在目标 Topic
-    if update.message.message_thread_id != config['telegram']['topic_id']:
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
         return  # 忽略非目标 Topic
     
     # 在目标 Topic 内，回复 pong
@@ -1487,7 +1622,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def run_telegram_bot():
     """启动 Telegram Bot"""
     # 创建应用
-    application = Application.builder().token(config['telegram']['token']).build()
+    cfg = load_config()
+    application = Application.builder().token(cfg['telegram']['token']).build()
     
     # 添加处理器
     application.add_handler(CommandHandler("start", start_command))
@@ -1508,9 +1644,9 @@ def run_telegram_bot():
     
     # 启动 Bot
     print("🤖 启动 Telegram Bot...")
-    print(f"   目标群组: {config['telegram']['chat_id']}")
-    print(f"   目标 Topic: {config['telegram']['topic_id']}")
-    print(f"   管理员: {config['telegram']['admins']}")
+    print(f"   目标群组: {cfg['telegram']['chat_id']}")
+    print(f"   目标 Topic: {cfg['telegram']['topic_id']}")
+    print(f"   管理员: {cfg['telegram']['admins']}")
     
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
