@@ -99,6 +99,21 @@ class FTClient:
                 elif "timed out" in str(error_text):
                     # 超时错误
                     return {"error": "timeout", "message": "请求超时"}
+                elif "Insufficient balance" in error_text or "insufficient" in error_text.lower():
+                    # 余额不足错误
+                    return {"error": "insufficient_balance", "message": "余额不足"}
+                elif "Market is closed" in error_text or "market closed" in error_text.lower():
+                    # 市场关闭错误
+                    return {"error": "market_closed", "message": "市场已关闭"}
+                elif "Rate limit" in error_text or "rate limit" in error_text.lower():
+                    # 频率限制错误
+                    return {"error": "rate_limit", "message": "请求频率过高，请稍后重试"}
+                elif "Invalid pair" in error_text or "invalid pair" in error_text.lower():
+                    # 无效交易对错误
+                    return {"error": "invalid_pair", "message": "无效的交易对"}
+                elif "Maintenance" in error_text or "maintenance" in error_text.lower():
+                    # 维护中错误
+                    return {"error": "maintenance", "message": "系统维护中"}
                 
                 # 只打印 5xx 服务器错误，4xx 客户端错误（如 404）是预期的
                 if response.status_code >= 500:
@@ -455,7 +470,16 @@ async def basket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
         
     except Exception as e:
-        await update.message.reply_text(f"❌ 获取篮子信息失败: {str(e)}")
+        # 解析错误类型并提供友好的错误信息
+        error_str = str(e).lower()
+        if "permission" in error_str or "access" in error_str:
+            await update.message.reply_text("❌ 获取篮子信息失败: 🔐 文件权限不足")
+        elif "not found" in error_str or "no such file" in error_str:
+            await update.message.reply_text("❌ 获取篮子信息失败: 📁 配置文件不存在")
+        elif "yaml" in error_str or "format" in error_str:
+            await update.message.reply_text("❌ 获取篮子信息失败: 📝 配置文件格式错误")
+        else:
+            await update.message.reply_text(f"❌ 获取篮子信息失败: {str(e)[:50]}")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /status 命令"""
@@ -509,7 +533,18 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     message += f"    ... 还有 {long_count - 5} 个持仓\n"
             
         except Exception as e:
-            message += f"🔵 **多仓实例**: 🔴 连接失败 ({str(e)[:50]}...)\n"
+            # 解析连接错误类型
+            error_str = str(e).lower()
+            if "timeout" in error_str or "timed out" in error_str:
+                message += "🔵 **多仓实例**: ⏰ 连接超时\n"
+            elif "connection" in error_str or "connect" in error_str:
+                message += "🔵 **多仓实例**: 🔴 连接失败 (网络问题)\n"
+            elif "forbidden" in error_str or "401" in error_str:
+                message += "🔵 **多仓实例**: 🔐 认证失败 (检查用户名密码)\n"
+            elif "not found" in error_str or "404" in error_str:
+                message += "🔵 **多仓实例**: 🚫 服务未找到 (检查URL路径)\n"
+            else:
+                message += f"🔵 **多仓实例**: 🔴 连接失败 ({str(e)[:30]}...)\n"
         
         # 获取空仓实例状态
         try:
@@ -534,7 +569,18 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     message += f"    ... 还有 {short_count - 5} 个持仓\n"
             
         except Exception as e:
-            message += f"\n🔴 **空仓实例**: 🔴 连接失败 ({str(e)[:50]}...)\n"
+            # 解析连接错误类型
+            error_str = str(e).lower()
+            if "timeout" in error_str or "timed out" in error_str:
+                message += "\n🔴 **空仓实例**: ⏰ 连接超时\n"
+            elif "connection" in error_str or "connect" in error_str:
+                message += "\n🔴 **空仓实例**: 🔴 连接失败 (网络问题)\n"
+            elif "forbidden" in error_str or "401" in error_str:
+                message += "\n🔴 **空仓实例**: 🔐 认证失败 (检查用户名密码)\n"
+            elif "not found" in error_str or "404" in error_str:
+                message += "\n🔴 **空仓实例**: 🚫 服务未找到 (检查URL路径)\n"
+            else:
+                message += f"\n🔴 **空仓实例**: 🔴 连接失败 ({str(e)[:30]}...)\n"
         
         # 总结
         try:
@@ -552,7 +598,16 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
         
     except Exception as e:
-        await update.message.reply_text(f"❌ 获取状态信息失败: {str(e)}")
+        # 解析错误类型并提供友好的错误信息
+        error_str = str(e).lower()
+        if "permission" in error_str or "access" in error_str:
+            await update.message.reply_text("❌ 获取状态信息失败: 🔐 文件权限不足")
+        elif "not found" in error_str or "no such file" in error_str:
+            await update.message.reply_text("❌ 获取状态信息失败: 📁 配置文件不存在")
+        elif "timeout" in error_str or "timed out" in error_str:
+            await update.message.reply_text("❌ 获取状态信息失败: ⏰ 连接超时")
+        else:
+            await update.message.reply_text(f"❌ 获取状态信息失败: {str(e)[:50]}")
 
 async def basket_set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /basket_set 命令"""
@@ -978,7 +1033,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         message += f"    ... 还有 {long_count - 5} 个持仓\n"
                 
             except Exception as e:
-                message += f"🔵 **多仓实例**: 🔴 连接失败 ({str(e)[:50]}...)\n"
+                # 解析连接错误类型
+                error_str = str(e).lower()
+                if "timeout" in error_str or "timed out" in error_str:
+                    message += "🔵 **多仓实例**: ⏰ 连接超时\n"
+                elif "connection" in error_str or "connect" in error_str:
+                    message += "🔵 **多仓实例**: 🔴 连接失败 (网络问题)\n"
+                elif "forbidden" in error_str or "401" in error_str:
+                    message += "🔵 **多仓实例**: 🔐 认证失败 (检查用户名密码)\n"
+                elif "not found" in error_str or "404" in error_str:
+                    message += "🔵 **多仓实例**: 🚫 服务未找到 (检查URL路径)\n"
+                else:
+                    message += f"🔵 **多仓实例**: 🔴 连接失败 ({str(e)[:30]}...)\n"
             
             # 获取空仓实例状态
             try:
@@ -1003,7 +1069,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         message += f"    ... 还有 {short_count - 5} 个持仓\n"
                 
             except Exception as e:
-                message += f"\n🔴 **空仓实例**: 🔴 连接失败 ({str(e)[:50]}...)\n"
+                # 解析连接错误类型
+                error_str = str(e).lower()
+                if "timeout" in error_str or "timed out" in error_str:
+                    message += "\n🔴 **空仓实例**: ⏰ 连接超时\n"
+                elif "connection" in error_str or "connect" in error_str:
+                    message += "\n🔴 **空仓实例**: 🔴 连接失败 (网络问题)\n"
+                elif "forbidden" in error_str or "401" in error_str:
+                    message += "\n🔴 **空仓实例**: 🔐 认证失败 (检查用户名密码)\n"
+                elif "not found" in error_str or "404" in error_str:
+                    message += "\n🔴 **空仓实例**: 🚫 服务未找到 (检查URL路径)\n"
+                else:
+                    message += f"\n🔴 **空仓实例**: 🔴 连接失败 ({str(e)[:30]}...)\n"
             
             # 总结
             try:
@@ -1187,6 +1264,21 @@ async def execute_go_long(query, op_id: str):
                             error_count += 1
                         elif error_type == "timeout":
                             results.append(f"⏰ {i}/{len(basket)} {pair} - 请求超时")
+                            error_count += 1
+                        elif error_type == "insufficient_balance":
+                            results.append(f"💰 {i}/{len(basket)} {pair} - 余额不足")
+                            error_count += 1
+                        elif error_type == "market_closed":
+                            results.append(f"🏪 {i}/{len(basket)} {pair} - 市场已关闭")
+                            error_count += 1
+                        elif error_type == "rate_limit":
+                            results.append(f"🚦 {i}/{len(basket)} {pair} - 请求频率过高")
+                            error_count += 1
+                        elif error_type == "invalid_pair":
+                            results.append(f"🚫 {i}/{len(basket)} {pair} - 无效的交易对")
+                            error_count += 1
+                        elif error_type == "maintenance":
+                            results.append(f"🔧 {i}/{len(basket)} {pair} - 系统维护中")
                             error_count += 1
                         else:
                             results.append(f"❌ {i}/{len(basket)} {pair} - {error_msg}")
@@ -1528,6 +1620,21 @@ async def execute_go_short(query, op_id: str):
                             total_error += 1
                         elif error_type == "timeout":
                             results.append(f"⏰ 开空仓 {i}/{len(basket)}: {pair} - 请求超时")
+                            total_error += 1
+                        elif error_type == "insufficient_balance":
+                            results.append(f"💰 开空仓 {i}/{len(basket)}: {pair} - 余额不足")
+                            total_error += 1
+                        elif error_type == "market_closed":
+                            results.append(f"🏪 开空仓 {i}/{len(basket)}: {pair} - 市场已关闭")
+                            total_error += 1
+                        elif error_type == "rate_limit":
+                            results.append(f"🚦 开空仓 {i}/{len(basket)}: {pair} - 请求频率过高")
+                            total_error += 1
+                        elif error_type == "invalid_pair":
+                            results.append(f"🚫 开空仓 {i}/{len(basket)}: {pair} - 无效的交易对")
+                            total_error += 1
+                        elif error_type == "maintenance":
+                            results.append(f"🔧 开空仓 {i}/{len(basket)}: {pair} - 系统维护中")
                             total_error += 1
                         else:
                             results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - {error_msg}")
