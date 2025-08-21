@@ -1234,11 +1234,10 @@ async def execute_go_long(query, op_id: str):
             cfg['freqtrade']['long']['pass']
         )
         
-        # 更新确认消息为执行中
-        await safe_edit_message(
-            query,
-            f"🚀 **开多执行中** (ID: {op_id})\n\n⏳ 正在执行开多操作..."
-        )
+        # 更新确认消息为开始状态
+        start_message = f"🚀 **开多操作开始** (ID: {op_id})\n\n📊 **执行计划**:\n  • 交易对数量: {len(basket)} 个\n  • 每笔名义: `{cfg['defaults']['stake']}` USDT\n  • 延迟间隔: `{cfg['defaults']['delay_ms']}` ms\n\n⏳ 开始执行..."
+        
+        await query.edit_message_text(start_message, parse_mode='Markdown')
         
         # 执行开多操作
         results = []
@@ -1250,6 +1249,9 @@ async def execute_go_long(query, op_id: str):
                 # 执行开多
                 result = long_client.forcebuy(pair, cfg['defaults']['stake'])
                 
+                # 构建当前进度消息
+                progress_text = f"🚀 **开多进度** (ID: {op_id})\n\n"
+                
                 if result is not None:
                     if isinstance(result, dict) and "error" in result:
                         # 处理特定错误类型
@@ -1257,74 +1259,108 @@ async def execute_go_long(query, op_id: str):
                         error_msg = result.get("message", "未知错误")
                         
                         if error_type == "position_exists":
+                            progress_text += f"✅ [{i}/{len(basket)}] `{pair}` → 持仓已存在\n"
                             results.append(f"⚠️ {i}/{len(basket)} {pair} - 持仓已存在")
                             success_count += 1  # 持仓已存在也算成功
                         elif error_type == "symbol_not_found":
+                            progress_text += f"❌ [{i}/{len(basket)}] `{pair}` → 交易对不存在\n"
                             results.append(f"❌ {i}/{len(basket)} {pair} - 交易对不存在")
                             error_count += 1
                         elif error_type == "timeout":
+                            progress_text += f"⏰ [{i}/{len(basket)}] `{pair}` → 请求超时\n"
                             results.append(f"⏰ {i}/{len(basket)} {pair} - 请求超时")
                             error_count += 1
                         elif error_type == "insufficient_balance":
+                            progress_text += f"💰 [{i}/{len(basket)}] `{pair}` → 余额不足\n"
                             results.append(f"💰 {i}/{len(basket)} {pair} - 余额不足")
                             error_count += 1
                         elif error_type == "market_closed":
+                            progress_text += f"🏪 [{i}/{len(basket)}] `{pair}` → 市场已关闭\n"
                             results.append(f"🏪 {i}/{len(basket)} {pair} - 市场已关闭")
                             error_count += 1
                         elif error_type == "rate_limit":
+                            progress_text += f"🚦 [{i}/{len(basket)}] `{pair}` → 请求频率过高\n"
                             results.append(f"🚦 {i}/{len(basket)} {pair} - 请求频率过高")
                             error_count += 1
                         elif error_type == "invalid_pair":
+                            progress_text += f"🚫 [{i}/{len(basket)}] `{pair}` → 无效的交易对\n"
                             results.append(f"🚫 {i}/{len(basket)} {pair} - 无效的交易对")
                             error_count += 1
                         elif error_type == "maintenance":
+                            progress_text += f"🔧 [{i}/{len(basket)}] `{pair}` → 系统维护中\n"
                             results.append(f"🔧 {i}/{len(basket)} {pair} - 系统维护中")
                             error_count += 1
                         else:
+                            progress_text += f"❌ [{i}/{len(basket)}] `{pair}` → {error_msg}\n"
                             results.append(f"❌ {i}/{len(basket)} {pair} - {error_msg}")
                             error_count += 1
                     else:
+                        progress_text += f"✅ [{i}/{len(basket)}] `{pair}` → 开多成功\n"
                         results.append(f"✅ {i}/{len(basket)} {pair} - 开多成功")
                         success_count += 1
                 else:
+                    progress_text += f"❌ [{i}/{len(basket)}] `{pair}` → 开多失败\n"
                     results.append(f"❌ {i}/{len(basket)} {pair} - 开多失败")
                     error_count += 1
+                
+                # 添加当前统计
+                progress_text += f"\n📊 **当前统计**:\n  • 成功: {success_count} 笔\n  • 失败: {error_count} 笔\n  • 进度: {i}/{len(basket)}"
+                
+                # 更新确认消息显示进度
+                try:
+                    await query.edit_message_text(progress_text, parse_mode='Markdown')
+                except Exception:
+                    # 如果编辑失败，尝试不使用Markdown
+                    await query.edit_message_text(progress_text, parse_mode=None)
                 
                 # 延迟
                 if i < len(basket):  # 最后一笔不需要延迟
                     await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
                     
             except Exception as e:
+                # 构建错误的进度消息
+                progress_text = f"🚀 **开多进度** (ID: {op_id})\n\n"
+                progress_text += f"❌ [{i}/{len(basket)}] `{pair}` → 错误: {str(e)[:30]}\n"
                 results.append(f"❌ {i}/{len(basket)} {pair} - 错误: {str(e)[:50]}")
                 error_count += 1
+                
+                # 添加当前统计
+                progress_text += f"\n📊 **当前统计**:\n  • 成功: {success_count} 笔\n  • 失败: {error_count} 笔\n  • 进度: {i}/{len(basket)}"
+                
+                # 更新确认消息显示进度
+                try:
+                    await query.edit_message_text(progress_text, parse_mode='Markdown')
+                except Exception:
+                    await query.edit_message_text(progress_text, parse_mode=None)
         
-        # 构建结果消息
-        message = f"🚀 **开多完成** (ID: {op_id})\n\n"
-        message += "📊 **执行结果**:\n"
-        message += f"  • 成功: {success_count} 笔\n"
-        message += f"  • 失败: {error_count} 笔\n"
-        message += f"  • 总计: {len(basket)} 笔\n\n"
+        # 构建汇总消息
+        summary_message = f"🎯 **开多操作完成** (ID: {op_id})\n\n"
+        summary_message += "📊 **最终汇总**:\n"
+        summary_message += f"  • 成功: {success_count} 笔\n"
+        summary_message += f"  • 失败: {error_count} 笔\n"
+        summary_message += f"  • 总计: {len(basket)} 笔\n\n"
         
         # 显示详细结果（最多显示前5个）
-        message += "📋 **详细结果**:\n"
+        summary_message += "📋 **详细结果**:\n"
         for result in results[:5]:
-            message += f"  {result}\n"
+            summary_message += f"  {result}\n"
         
         if len(results) > 5:
-            message += f"  ... 还有 {len(results) - 5} 笔\n"
+            summary_message += f"  ... 还有 {len(results) - 5} 笔\n"
         
         # 添加时间戳
         current_time = datetime.now().strftime("%H:%M:%S")
-        message += f"\n⏰ 完成时间: {current_time}"
+        summary_message += f"\n⏰ 完成时间: {current_time}"
         
+        # 更新确认消息为最终汇总
         try:
-            await query.edit_message_text(message, parse_mode='Markdown')
+            await query.edit_message_text(summary_message, parse_mode='Markdown')
         except Exception as e:
             if "can't parse entities" in str(e):
                 # 如果 Markdown 解析失败，尝试不使用 Markdown
-                await query.edit_message_text(message, parse_mode=None)
+                await query.edit_message_text(summary_message, parse_mode=None)
             else:
-                raise e
+                await query.edit_message_text(f"❌ 更新汇总失败: {str(e)}")
         
         # 写入审计日志
         audit_log = f"[{datetime.now().isoformat()}] GO_LONG {op_id} - Success: {success_count}, Failed: {error_count}, Total: {len(basket)}\n"
@@ -1356,11 +1392,10 @@ async def execute_flat(query, op_id: str):
             cfg['freqtrade']['short']['pass']
         )
         
-        # 更新确认消息为执行中
-        await query.edit_message_text(
-            f"🚫 **全平执行中** (ID: {op_id})\n\n⏳ 正在执行全平操作...",
-            parse_mode='Markdown'
-        )
+        # 更新确认消息为开始状态
+        start_message = f"🚫 **全平操作开始** (ID: {op_id})\n\n📊 **执行计划**:\n  • 取消所有开放订单\n  • 平掉所有多仓持仓\n  • 平掉所有空仓持仓\n\n⏳ 开始执行..."
+        
+        await query.edit_message_text(start_message, parse_mode='Markdown')
         
         # 执行全平操作
         results = []
@@ -1368,14 +1403,12 @@ async def execute_flat(query, op_id: str):
         total_error = 0
         
         # 1. 取消所有开放订单
-        await query.edit_message_text(
-            f"🚫 **全平执行中** (ID: {op_id})\n\n⏳ 正在取消开放订单...",
-            parse_mode='Markdown'
-        )
+        step1_message = f"🚫 **全平进度** (ID: {op_id})\n\n📋 **第一步：取消开放订单**\n⏳ 正在处理..."
+        await query.edit_message_text(step1_message, parse_mode='Markdown')
         
         try:
-            long_cancel = long_client.cancel_open_orders()
-            short_cancel = short_client.cancel_open_orders()
+            long_client.cancel_open_orders()
+            short_client.cancel_open_orders()
             results.append("✅ 取消开放订单完成")
         except Exception as e:
             # 检查是否是无开放订单的错误
@@ -1385,10 +1418,8 @@ async def execute_flat(query, op_id: str):
                 results.append(f"❌ 取消开放订单失败: {str(e)[:50]}")
         
         # 2. 平掉多仓持仓
-        await query.edit_message_text(
-            f"🚫 **全平执行中** (ID: {op_id})\n\n⏳ 正在平掉多仓持仓...",
-            parse_mode='Markdown'
-        )
+        step2_message = f"🚫 **全平进度** (ID: {op_id})\n\n📋 **第二步：平掉多仓持仓**\n⏳ 正在处理..."
+        await query.edit_message_text(step2_message, parse_mode='Markdown')
         
         try:
             long_positions = long_client.list_positions()
@@ -1429,10 +1460,8 @@ async def execute_flat(query, op_id: str):
             results.append(f"❌ 获取多仓持仓失败: {str(e)[:50]}")
         
         # 3. 平掉空仓持仓
-        await query.edit_message_text(
-            f"🚫 **全平执行中** (ID: {op_id})\n\n⏳ 正在平掉空仓持仓...",
-            parse_mode='Markdown'
-        )
+        step3_message = f"🚫 **全平进度** (ID: {op_id})\n\n📋 **第三步：平掉空仓持仓**\n⏳ 正在处理..."
+        await query.edit_message_text(step3_message, parse_mode='Markdown')
         
         try:
             short_positions = short_client.list_positions()
@@ -1472,33 +1501,34 @@ async def execute_flat(query, op_id: str):
         except Exception as e:
             results.append(f"❌ 获取空仓持仓失败: {str(e)[:50]}")
         
-        # 构建结果消息
-        message = f"🚫 **全平完成** (ID: {op_id})\n\n"
-        message += "📊 **执行结果**:\n"
-        message += f"  • 成功: {total_success} 笔\n"
-        message += f"  • 失败: {total_error} 笔\n"
-        message += f"  • 总计: {total_success + total_error} 笔\n\n"
+        # 构建汇总消息
+        summary_message = f"🎯 **全平操作完成** (ID: {op_id})\n\n"
+        summary_message += "📊 **最终汇总**:\n"
+        summary_message += f"  • 成功: {total_success} 笔\n"
+        summary_message += f"  • 失败: {total_error} 笔\n"
+        summary_message += f"  • 总计: {total_success + total_error} 笔\n\n"
         
         # 显示详细结果（最多显示前8个）
-        message += "📋 **详细结果**:\n"
+        summary_message += "📋 **详细结果**:\n"
         for result in results[:8]:
-            message += f"  {result}\n"
+            summary_message += f"  {result}\n"
         
         if len(results) > 8:
-            message += f"  ... 还有 {len(results) - 8} 项\n"
+            summary_message += f"  ... 还有 {len(results) - 8} 项\n"
         
         # 添加时间戳
         current_time = datetime.now().strftime("%H:%M:%S")
-        message += f"\n⏰ 完成时间: {current_time}"
+        summary_message += f"\n⏰ 完成时间: {current_time}"
         
+        # 更新确认消息为最终汇总
         try:
-            await query.edit_message_text(message, parse_mode='Markdown')
+            await query.edit_message_text(summary_message, parse_mode='Markdown')
         except Exception as e:
             if "can't parse entities" in str(e):
                 # 如果 Markdown 解析失败，尝试不使用 Markdown
-                await query.edit_message_text(message, parse_mode=None)
+                await query.edit_message_text(summary_message, parse_mode=None)
             else:
-                raise e
+                await query.edit_message_text(f"❌ 更新汇总失败: {str(e)}")
         
         # 写入审计日志
         audit_log = f"[{datetime.now().isoformat()}] FLAT {op_id} - Success: {total_success}, Failed: {total_error}, Total: {total_success + total_error}\n"
@@ -1531,21 +1561,18 @@ async def execute_go_short(query, op_id: str):
             cfg['freqtrade']['short']['pass']
         )
         
-        # 更新确认消息为执行中
-        await query.edit_message_text(
-            f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 正在执行反向操作...",
-            parse_mode='Markdown'
-        )
+        # 更新确认消息为开始状态
+        start_message = f"🔴 **开空操作开始** (ID: {op_id})\n\n📊 **执行计划**:\n  • 交易对数量: {len(basket)} 个\n  • 每笔名义: `{cfg['defaults']['stake']}` USDT\n  • 延迟间隔: `{cfg['defaults']['delay_ms']}` ms\n\n⏳ 开始执行..."
+        
+        await query.edit_message_text(start_message, parse_mode='Markdown')
         
         results = []
         total_success = 0
         total_error = 0
         
         # 第一步：发送平仓信号给多仓账户
-        await query.edit_message_text(
-            f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 第一步：正在发送平仓信号...",
-            parse_mode='Markdown'
-        )
+        step1_message = f"🔴 **开空进度** (ID: {op_id})\n\n📋 **第一步：发送平仓信号**\n⏳ 正在处理..."
+        await query.edit_message_text(step1_message, parse_mode='Markdown')
         
         try:
             # 取消开放订单
@@ -1562,30 +1589,59 @@ async def execute_go_short(query, op_id: str):
                             trade_id = pos['trade_id']
                             pair = pos.get('pair', 'Unknown')
                             result = long_client._request("POST", "/api/v1/forceexit", json={"tradeid": trade_id})
+                            
+                            # 构建当前进度消息
+                            progress_text = f"🔴 **开空进度** (ID: {op_id})\n\n📋 **第一步：发送平仓信号**\n"
+                            
                             if result is not None:
                                 if isinstance(result, dict) and "error" in result:
                                     error_type = result.get("error")
                                     error_msg = result.get("message", "未知错误")
                                     
                                     if error_type == "no_open_order":
+                                        progress_text += f"ℹ️ [{i}/{len(long_positions)}] `{pair}` → 无开放订单\n"
                                         results.append(f"ℹ️ 平仓信号 {i}: {pair} - 无开放订单")
                                         total_success += 1  # 无订单也算成功
                                     else:
+                                        progress_text += f"❌ [{i}/{len(long_positions)}] `{pair}` → {error_msg}\n"
                                         results.append(f"❌ 平仓信号 {i}: {pair} - {error_msg}")
                                         total_error += 1
                                 else:
+                                    progress_text += f"✅ [{i}/{len(long_positions)}] `{pair}` → 平仓信号发送成功\n"
                                     results.append(f"✅ 平仓信号 {i}: {pair}")
                                     total_success += 1
                             else:
+                                progress_text += f"❌ [{i}/{len(long_positions)}] `{pair}` → 平仓信号发送失败\n"
                                 results.append(f"❌ 平仓信号 {i}: {pair} - 失败")
                                 total_error += 1
+                            
+                            # 添加当前统计
+                            progress_text += f"\n📊 **当前统计**:\n  • 成功: {total_success} 笔\n  • 失败: {total_error} 笔\n  • 进度: {i}/{len(long_positions)}"
+                            
+                            # 更新进度消息
+                            try:
+                                await query.edit_message_text(progress_text, parse_mode='Markdown')
+                            except Exception:
+                                progress_message = await query.message.reply_text(progress_text, parse_mode='Markdown')
                             
                             # 延迟
                             if i < len(long_positions):
                                 await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
                     except Exception as e:
+                        # 构建错误的进度消息
+                        progress_text = f"🔴 **开空进度** (ID: {op_id})\n\n📋 **第一步：发送平仓信号**\n"
+                        progress_text += f"❌ [{i}/{len(long_positions)}] `{pair}` → 错误: {str(e)[:30]}\n"
                         results.append(f"❌ 平仓信号 {i}: 错误 - {str(e)[:50]}")
                         total_error += 1
+                        
+                        # 添加当前统计
+                        progress_text += f"\n📊 **当前统计**:\n  • 成功: {total_success} 笔\n  • 失败: {total_error} 笔\n  • 进度: {i}/{len(long_positions)}"
+                        
+                        # 更新进度消息
+                        try:
+                            await query.edit_message_text(progress_text, parse_mode='Markdown')
+                        except Exception:
+                            progress_message = await query.message.reply_text(progress_text, parse_mode='Markdown')
                 
                 results.append("✅ 多仓平仓信号发送完成")
                     
@@ -1596,15 +1652,16 @@ async def execute_go_short(query, op_id: str):
             results.append(f"❌ 发送平仓信号失败: {str(e)[:50]}")
         
         # 第二步：逐个开空仓
-        await query.edit_message_text(
-            f"🔴 **开空执行中** (ID: {op_id})\n\n⏳ 第二步：正在开空仓...",
-            parse_mode='Markdown'
-        )
+        step2_message = f"🔴 **开空进度** (ID: {op_id})\n\n📋 **第二步：开空仓**\n⏳ 正在处理..."
+        await query.edit_message_text(step2_message, parse_mode='Markdown')
         
         for i, pair in enumerate(basket, 1):
             try:
                 # 执行开空
                 result = short_client.forceshort(pair, cfg['defaults']['stake'])
+                
+                # 构建当前进度消息
+                progress_text = f"🔴 **开空进度** (ID: {op_id})\n\n📋 **第二步：开空仓**\n"
                 
                 if result is not None:
                     if isinstance(result, dict) and "error" in result:
@@ -1613,74 +1670,107 @@ async def execute_go_short(query, op_id: str):
                         error_msg = result.get("message", "未知错误")
                         
                         if error_type == "position_exists":
+                            progress_text += f"⚠️ [{i}/{len(basket)}] `{pair}` → 持仓已存在\n"
                             results.append(f"⚠️ 开空仓 {i}/{len(basket)}: {pair} - 持仓已存在")
                             total_success += 1  # 持仓已存在也算成功
                         elif error_type == "symbol_not_found":
+                            progress_text += f"❌ [{i}/{len(basket)}] `{pair}` → 交易对不存在\n"
                             results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - 交易对不存在")
                             total_error += 1
                         elif error_type == "timeout":
+                            progress_text += f"⏰ [{i}/{len(basket)}] `{pair}` → 请求超时\n"
                             results.append(f"⏰ 开空仓 {i}/{len(basket)}: {pair} - 请求超时")
                             total_error += 1
                         elif error_type == "insufficient_balance":
+                            progress_text += f"💰 [{i}/{len(basket)}] `{pair}` → 余额不足\n"
                             results.append(f"💰 开空仓 {i}/{len(basket)}: {pair} - 余额不足")
                             total_error += 1
                         elif error_type == "market_closed":
+                            progress_text += f"🏪 [{i}/{len(basket)}] `{pair}` → 市场已关闭\n"
                             results.append(f"🏪 开空仓 {i}/{len(basket)}: {pair} - 市场已关闭")
                             total_error += 1
                         elif error_type == "rate_limit":
+                            progress_text += f"🚦 [{i}/{len(basket)}] `{pair}` → 请求频率过高\n"
                             results.append(f"🚦 开空仓 {i}/{len(basket)}: {pair} - 请求频率过高")
                             total_error += 1
                         elif error_type == "invalid_pair":
+                            progress_text += f"🚫 [{i}/{len(basket)}] `{pair}` → 无效的交易对\n"
                             results.append(f"🚫 开空仓 {i}/{len(basket)}: {pair} - 无效的交易对")
                             total_error += 1
                         elif error_type == "maintenance":
+                            progress_text += f"🔧 [{i}/{len(basket)}] `{pair}` → 系统维护中\n"
                             results.append(f"🔧 开空仓 {i}/{len(basket)}: {pair} - 系统维护中")
                             total_error += 1
                         else:
+                            progress_text += f"❌ [{i}/{len(basket)}] `{pair}` → {error_msg}\n"
                             results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - {error_msg}")
                             total_error += 1
                     else:
+                        progress_text += f"✅ [{i}/{len(basket)}] `{pair}` → 开空成功\n"
                         results.append(f"✅ 开空仓 {i}/{len(basket)}: {pair}")
                         total_success += 1
                 else:
+                    progress_text += f"❌ [{i}/{len(basket)}] `{pair}` → 开空失败\n"
                     results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - 失败")
                     total_error += 1
+                
+                # 添加当前统计
+                progress_text += f"\n📊 **当前统计**:\n  • 成功: {total_success} 笔\n  • 失败: {total_error} 笔\n  • 进度: {i}/{len(basket)}"
+                
+                # 更新进度消息
+                try:
+                    await query.edit_message_text(progress_text, parse_mode='Markdown')
+                except Exception:
+                    progress_message = await query.message.reply_text(progress_text, parse_mode='Markdown')
                 
                 # 延迟
                 if i < len(basket):  # 最后一笔不需要延迟
                     await asyncio.sleep(cfg['defaults']['delay_ms'] / 1000)
                     
             except Exception as e:
+                # 构建错误的进度消息
+                progress_text = f"🔴 **开空进度** (ID: {op_id})\n\n📋 **第二步：开空仓**\n"
+                progress_text += f"❌ [{i}/{len(basket)}] `{pair}` → 错误: {str(e)[:30]}\n"
                 results.append(f"❌ 开空仓 {i}/{len(basket)}: {pair} - 错误: {str(e)[:50]}")
                 total_error += 1
+                
+                # 添加当前统计
+                progress_text += f"\n📊 **当前统计**:\n  • 成功: {total_success} 笔\n  • 失败: {total_error} 笔\n  • 进度: {i}/{len(basket)}"
+                
+                # 更新确认消息显示进度
+                try:
+                    await query.edit_message_text(progress_text, parse_mode='Markdown')
+                except Exception:
+                    await query.edit_message_text(progress_text, parse_mode=None)
         
-        # 构建结果消息
-        message = f"🔴 **开空完成** (ID: {op_id})\n\n"
-        message += "📊 **执行结果**:\n"
-        message += f"  • 成功: {total_success} 笔\n"
-        message += f"  • 失败: {total_error} 笔\n"
-        message += f"  • 总计: {total_success + total_error} 笔\n\n"
+        # 构建汇总消息
+        summary_message = f"🎯 **开空操作完成** (ID: {op_id})\n\n"
+        summary_message += "📊 **最终汇总**:\n"
+        summary_message += f"  • 成功: {total_success} 笔\n"
+        summary_message += f"  • 失败: {total_error} 笔\n"
+        summary_message += f"  • 总计: {total_success + total_error} 笔\n\n"
         
         # 显示详细结果（最多显示前8个）
-        message += "📋 **详细结果**:\n"
+        summary_message += "📋 **详细结果**:\n"
         for result in results[:8]:
-            message += f"  {result}\n"
+            summary_message += f"  {result}\n"
         
         if len(results) > 8:
-            message += f"  ... 还有 {len(results) - 8} 项\n"
+            summary_message += f"  ... 还有 {len(results) - 8} 项\n"
         
         # 添加时间戳
         current_time = datetime.now().strftime("%H:%M:%S")
-        message += f"\n⏰ 完成时间: {current_time}"
+        summary_message += f"\n⏰ 完成时间: {current_time}"
         
+        # 更新确认消息为最终汇总
         try:
-            await query.edit_message_text(message, parse_mode='Markdown')
+            await query.edit_message_text(summary_message, parse_mode='Markdown')
         except Exception as e:
             if "can't parse entities" in str(e):
                 # 如果 Markdown 解析失败，尝试不使用 Markdown
-                await query.edit_message_text(message, parse_mode=None)
+                await query.edit_message_text(summary_message, parse_mode=None)
             else:
-                raise e
+                await query.edit_message_text(f"❌ 更新汇总失败: {str(e)}")
         
         # 写入审计日志
         audit_log = f"[{datetime.now().isoformat()}] GO_SHORT {op_id} - Success: {total_success}, Failed: {total_error}, Total: {total_success + total_error}\n"
