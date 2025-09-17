@@ -64,6 +64,17 @@ def load_basket() -> list[str]:
         print(f"错误：加载篮子文件失败 - {e}")
         return []
 
+def save_basket(basket: list[str]) -> bool:
+    """保存篮子到文件"""
+    try:
+        data = {'basket': basket}
+        with open('watchlist.yml', 'w', encoding='utf-8') as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+        return True
+    except Exception as e:
+        print(f"错误：保存篮子文件失败 - {e}")
+        return False
+
 class FTClient:
     """Freqtrade HTTP 客户端"""
     
@@ -220,15 +231,6 @@ class FTClient:
                     return self._request("POST", "/api/v1/forceexit", json=data)
         return None
     
-    def forceshort(self, pair: str, stake: float) -> Optional[Dict[Any, Any]]:
-        """强制开空仓"""
-        # 使用 /forceenter 端点，side="short" 表示空仓
-        data = {
-            "pair": pair,
-            "side": "short"
-        }
-        return self._request("POST", "/api/v1/forceenter", json=data)
-    
     def forcecover(self, pair: str) -> Optional[Dict[Any, Any]]:
         """强制平空仓"""
         # 需要先找到对应的 trade_id，然后使用 /forceexit
@@ -366,8 +368,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/basket` - 显示当前篮子与参数
 • `/status` - 显示实例状态与最近摘要
 
-⚙️ **设置命令：**
+⚙️ **篮子管理：**
 • `/basket_set <pairs...>` - 设置篮子 (别名: `/bs`)
+• `/add <pair>` - 添加交易对 (别名: `/a`)
+• `/remove <pair>` - 删除交易对 (别名: `/rm`)
+• `/clear` - 清空篮子 (别名: `/c`)
 • `/stake <amount>` - 设置每笔名义
 
 🚀 **交易命令：**
@@ -381,6 +386,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ---
 *仅管理员可在指定 Topic 内使用交易命令*
+*交易对格式: BTC/USDT 或 BTC/USDT:USDT*
     """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -586,7 +592,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             total_positions = long_count + short_count
             message += f"\n📊 **总计**: {total_positions} 个活跃持仓"
-        except:
+        except Exception:
             message += "\n📊 **总计**: 无法统计"
         
         # 创建内联键盘
@@ -774,7 +780,7 @@ async def safe_edit_message(query, message: str, parse_mode='Markdown'):
                 # 移除所有 Markdown 标记
                 plain_message = message.replace('**', '').replace('*', '').replace('`', '')
                 await query.edit_message_text(plain_message, parse_mode=None)
-            except:
+            except Exception:
                 # 最后的备选方案：只显示简单消息
                 await query.edit_message_text("操作完成", parse_mode=None)
         else:
@@ -937,6 +943,155 @@ async def go_short_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ 创建开空确认失败: {str(e)}")
 
+async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /add 命令 - 添加单个交易对到篮子"""
+    # 检查是否在目标群组和 Topic
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
+        return
+    
+    # 检查权限
+    has_permission, error_msg = check_permission(update.message.from_user.id)
+    if not has_permission:
+        await update.message.reply_text(error_msg)
+        return
+    
+    try:
+        # 获取命令参数
+        if not context.args:
+            await update.message.reply_text(
+                "❌ 请提供要添加的交易对\n"
+                "用法: `/add BTC/USDT` 或 `/add ETH/USDT:USDT`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        pair_input = context.args[0].upper()
+        
+        # 验证交易对格式
+        if not (re.match(r'^[A-Z0-9]+/[A-Z0-9]+$', pair_input) or 
+                re.match(r'^[A-Z0-9]+/[A-Z0-9]+:[A-Z0-9]+$', pair_input)):
+            await update.message.reply_text(
+                "❌ 无效的交易对格式\n"
+                "正确格式: `BTC/USDT` 或 `BTC/USDT:USDT`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # 转换为标准格式
+        if re.match(r'^[A-Z0-9]+/[A-Z0-9]+$', pair_input):
+            pair_standard = f"{pair_input}:USDT"
+        else:
+            pair_standard = pair_input
+        
+        # 加载当前篮子
+        basket = load_basket()
+        
+        # 检查是否已存在
+        if pair_standard in basket:
+            await update.message.reply_text(f"⚠️ 交易对 `{pair_standard}` 已存在于篮子中", parse_mode='Markdown')
+            return
+        
+        # 添加到篮子
+        basket.append(pair_standard)
+        
+        # 保存篮子
+        if save_basket(basket):
+            await update.message.reply_text(
+                f"✅ 成功添加交易对 `{pair_standard}` 到篮子\n"
+                f"📊 当前篮子包含 {len(basket)} 个交易对",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text("❌ 保存篮子失败")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ 添加交易对失败: {str(e)}")
+
+async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /remove 命令 - 从篮子中删除单个交易对"""
+    # 检查是否在目标群组和 Topic
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
+        return
+    
+    # 检查权限
+    has_permission, error_msg = check_permission(update.message.from_user.id)
+    if not has_permission:
+        await update.message.reply_text(error_msg)
+        return
+    
+    try:
+        # 获取命令参数
+        if not context.args:
+            await update.message.reply_text(
+                "❌ 请提供要删除的交易对\n"
+                "用法: `/remove BTC/USDT` 或 `/remove ETH/USDT:USDT`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        pair_input = context.args[0].upper()
+        
+        # 转换为标准格式
+        if re.match(r'^[A-Z0-9]+/[A-Z0-9]+$', pair_input):
+            pair_standard = f"{pair_input}:USDT"
+        else:
+            pair_standard = pair_input
+        
+        # 加载当前篮子
+        basket = load_basket()
+        
+        # 检查是否存在
+        if pair_standard not in basket:
+            await update.message.reply_text(f"⚠️ 交易对 `{pair_standard}` 不存在于篮子中", parse_mode='Markdown')
+            return
+        
+        # 从篮子中删除
+        basket.remove(pair_standard)
+        
+        # 保存篮子
+        if save_basket(basket):
+            await update.message.reply_text(
+                f"✅ 成功从篮子中删除交易对 `{pair_standard}`\n"
+                f"📊 当前篮子包含 {len(basket)} 个交易对",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text("❌ 保存篮子失败")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ 删除交易对失败: {str(e)}")
+
+async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /clear 命令 - 清空篮子"""
+    # 检查是否在目标群组和 Topic
+    cfg = load_config()
+    if update.message.chat.id != cfg['telegram']['chat_id']:
+        return
+    if update.message.message_thread_id != cfg['telegram']['topic_id']:
+        return
+    
+    # 检查权限
+    has_permission, error_msg = check_permission(update.message.from_user.id)
+    if not has_permission:
+        await update.message.reply_text(error_msg)
+        return
+    
+    try:
+        # 清空篮子
+        if save_basket([]):
+            await update.message.reply_text("✅ 成功清空篮子")
+        else:
+            await update.message.reply_text("❌ 清空篮子失败")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ 清空篮子失败: {str(e)}")
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理内联键盘按钮回调"""
     query = update.callback_query
@@ -972,6 +1127,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"  • 轮询超时: `{cfg['defaults']['poll_timeout_sec']}` 秒\n"
             message += f"  • 轮询间隔: `{cfg['defaults']['poll_interval_sec']}` 秒\n"
             
+            # 构建键盘
             keyboard = [
                 [InlineKeyboardButton("🔄 刷新", callback_data="refresh_basket")],
                 [
@@ -1086,7 +1242,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 total_positions = long_count + short_count
                 message += f"\n📊 **总计**: {total_positions} 个活跃持仓"
-            except:
+            except Exception:
                 message += "\n📊 **总计**: 无法统计"
             
             keyboard = [
@@ -1169,6 +1325,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.answer(f"❌ 创建确认失败: {str(e)}", show_alert=True)
             else:
                 await query.answer("❌ 未知操作", show_alert=True)
+        
+        elif query.data == "noop":
+            # 无操作按钮，只显示提示
+            await query.answer("ℹ️ 使用 /add /remove /clear 命令管理篮子", show_alert=False)
         
         # 处理交易命令回调
         elif query.data.startswith("CONFIRM|") or query.data.startswith("CANCEL|"):
@@ -1622,7 +1782,7 @@ async def execute_go_short(query, op_id: str):
                             try:
                                 await query.edit_message_text(progress_text, parse_mode='Markdown')
                             except Exception:
-                                progress_message = await query.message.reply_text(progress_text, parse_mode='Markdown')
+                                await query.message.reply_text(progress_text, parse_mode='Markdown')
                             
                             # 延迟
                             if i < len(long_positions):
@@ -1641,7 +1801,7 @@ async def execute_go_short(query, op_id: str):
                         try:
                             await query.edit_message_text(progress_text, parse_mode='Markdown')
                         except Exception:
-                            progress_message = await query.message.reply_text(progress_text, parse_mode='Markdown')
+                            await query.message.reply_text(progress_text, parse_mode='Markdown')
                 
                 results.append("✅ 多仓平仓信号发送完成")
                     
@@ -1721,7 +1881,7 @@ async def execute_go_short(query, op_id: str):
                 try:
                     await query.edit_message_text(progress_text, parse_mode='Markdown')
                 except Exception:
-                    progress_message = await query.message.reply_text(progress_text, parse_mode='Markdown')
+                    await query.message.reply_text(progress_text, parse_mode='Markdown')
                 
                 # 延迟
                 if i < len(basket):  # 最后一笔不需要延迟
@@ -1834,6 +1994,12 @@ def run_telegram_bot():
     application.add_handler(CommandHandler("go_long", go_long_command))
     application.add_handler(CommandHandler("flat", flat_command))
     application.add_handler(CommandHandler("go_short", go_short_command))
+    application.add_handler(CommandHandler("add", add_command))
+    application.add_handler(CommandHandler("a", add_command))  # 别名
+    application.add_handler(CommandHandler("remove", remove_command))
+    application.add_handler(CommandHandler("rm", remove_command))  # 别名
+    application.add_handler(CommandHandler("clear", clear_command))
+    application.add_handler(CommandHandler("c", clear_command))  # 别名
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
