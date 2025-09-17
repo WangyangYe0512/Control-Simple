@@ -371,7 +371,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⚙️ **篮子管理：**
 • `/basket_set <pairs...>` - 设置篮子 (别名: `/bs`)
 • `/add <pair>` - 添加交易对 (别名: `/a`)
-• `/remove <pair>` - 删除交易对 (别名: `/rm`)
+• `/remove <pair|id>` - 删除交易对 (别名: `/rm`)
 • `/clear` - 清空篮子 (别名: `/c`)
 • `/stake <amount>` - 设置每笔名义
 
@@ -1030,34 +1030,56 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not context.args:
             await update.message.reply_text(
                 "❌ 请提供要删除的交易对\n"
-                "用法: `/remove BTC/USDT` 或 `/remove ETH/USDT:USDT`",
+                "用法: `/remove BTC/USDT` 或 `/remove 1` (通过ID删除)",
                 parse_mode='Markdown'
             )
             return
         
-        pair_input = context.args[0].upper()
-        
-        # 转换为标准格式
-        if re.match(r'^[A-Z0-9]+/[A-Z0-9]+$', pair_input):
-            pair_standard = f"{pair_input}:USDT"
-        else:
-            pair_standard = pair_input
+        input_arg = context.args[0]
         
         # 加载当前篮子
         basket = load_basket()
         
-        # 检查是否存在
-        if pair_standard not in basket:
-            await update.message.reply_text(f"⚠️ 交易对 `{pair_standard}` 不存在于篮子中", parse_mode='Markdown')
-            return
-        
-        # 从篮子中删除
-        basket.remove(pair_standard)
+        # 检查输入是否为数字（ID）
+        if input_arg.isdigit():
+            try:
+                pair_id = int(input_arg)
+                if 1 <= pair_id <= len(basket):
+                    # 通过ID删除
+                    pair_to_remove = basket[pair_id - 1]
+                    basket.pop(pair_id - 1)
+                else:
+                    await update.message.reply_text(
+                        f"⚠️ ID `{pair_id}` 超出范围 (1-{len(basket)})",
+                        parse_mode='Markdown'
+                    )
+                    return
+            except ValueError:
+                await update.message.reply_text("❌ 无效的ID格式", parse_mode='Markdown')
+                return
+        else:
+            # 通过交易对名称删除
+            pair_input = input_arg.upper()
+            
+            # 转换为标准格式
+            if re.match(r'^[A-Z0-9]+/[A-Z0-9]+$', pair_input):
+                pair_standard = f"{pair_input}:USDT"
+            else:
+                pair_standard = pair_input
+            
+            # 检查是否存在
+            if pair_standard not in basket:
+                await update.message.reply_text(f"⚠️ 交易对 `{pair_standard}` 不存在于篮子中", parse_mode='Markdown')
+                return
+            
+            # 从篮子中删除
+            pair_to_remove = pair_standard
+            basket.remove(pair_standard)
         
         # 保存篮子
         if save_basket(basket):
             await update.message.reply_text(
-                f"✅ 成功从篮子中删除交易对 `{pair_standard}`\n"
+                f"✅ 成功从篮子中删除交易对 `{pair_to_remove}`\n"
                 f"📊 当前篮子包含 {len(basket)} 个交易对",
                 parse_mode='Markdown'
             )
