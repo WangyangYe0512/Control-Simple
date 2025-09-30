@@ -19,3 +19,9 @@ defaults:
   delay_ms: 300
   poll_timeout_sec: 60
   poll_interval_sec: 2
+external_status:
+  url: "http://13.229.240.242:8085"
+  user: "freqtrader"
+  pass: "freqtrader"
+  interval_sec: 30
+  threshold: 400

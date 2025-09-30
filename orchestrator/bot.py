@@ -8,6 +8,11 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+try:
+    from .auto_toggle import schedule_auto_toggle
+except Exception:
+    # 作为脚本运行时的兼容导入
+    from auto_toggle import schedule_auto_toggle
 
 def load_config():
     """加载配置文件"""
@@ -245,6 +250,14 @@ class FTClient:
                     return self._request("POST", "/api/v1/forceexit", json=data)
         return None
 
+    def start_trading(self) -> Optional[Dict[Any, Any]]:
+        """启动实例交易 (相当于 /trading/start)"""
+        return self._request("POST", "/api/v1/trading/start")
+
+    def stop_trading(self) -> Optional[Dict[Any, Any]]:
+        """停止实例交易 (相当于 /trading/stop)"""
+        return self._request("POST", "/api/v1/trading/stop")
+
 
 # 权限控制和武装机制
 armed_until = None  # 武装到期时间
@@ -339,6 +352,7 @@ short_client = FTClient(
     cfg['freqtrade']['short']['user'],
     cfg['freqtrade']['short']['pass']
 )
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /start 命令"""
@@ -2034,6 +2048,16 @@ def run_telegram_bot():
     print(f"   目标 Topic: {cfg['telegram']['topic_id']}")
     print(f"   管理员: {cfg['telegram']['admins']}")
     
+    # 启动自动切换后台任务（解耦至 auto_toggle 模块）
+    schedule_auto_toggle(
+        application,
+        get_config=load_config,
+        start_long=lambda: long_client.start_trading(),
+        stop_long=lambda: long_client.stop_trading(),
+        start_short=lambda: short_client.start_trading(),
+        stop_short=lambda: short_client.stop_trading(),
+    )
+
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 # 启动 Bot
