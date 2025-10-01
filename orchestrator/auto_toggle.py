@@ -159,20 +159,24 @@ def _auto_toggle_loop(
             if direction:
                 if direction == 'long':
                     try:
-                        stop_short()
+                        result = stop_short()
+                        _log(f"[auto] stop_short result: {result}")
                     except Exception as e:
                         _log(f"[auto] stop_short error: {e}")
                     try:
-                        start_long()
+                        result = start_long()
+                        _log(f"[auto] start_long result: {result}")
                     except Exception as e:
                         _log(f"[auto] start_long error: {e}")
                 else:
                     try:
-                        stop_long()
+                        result = stop_long()
+                        _log(f"[auto] stop_long result: {result}")
                     except Exception as e:
                         _log(f"[auto] stop_long error: {e}")
                     try:
-                        start_short()
+                        result = start_short()
+                        _log(f"[auto] start_short result: {result}")
                     except Exception as e:
                         _log(f"[auto] start_short error: {e}")
 

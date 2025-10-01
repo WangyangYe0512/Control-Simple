@@ -251,12 +251,12 @@ class FTClient:
         return None
 
     def start_trading(self) -> Optional[Dict[Any, Any]]:
-        """启动实例交易 (相当于 /trading/start)"""
-        return self._request("POST", "/api/v1/trading/start")
+        """启动实例交易 (相当于 /start)"""
+        return self._request("POST", "/api/v1/start")
 
     def stop_trading(self) -> Optional[Dict[Any, Any]]:
-        """停止实例交易 (相当于 /trading/stop)"""
-        return self._request("POST", "/api/v1/trading/stop")
+        """停止实例交易 (相当于 /stop)"""
+        return self._request("POST", "/api/v1/stop")
 
 
 # 权限控制和武装机制
