@@ -109,12 +109,33 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                     if resp.headers.get('content-type', '').startswith('application/json'):
                         data = resp.json()
                         _log(f"[auto] long instance ping response: {data}")
-                        if data and isinstance(data, dict) and data.get('status') in ['running', 'pong']:
-                            long_running = True
-                            _log("[auto] long instance is running: ping endpoint returned valid status")
+                        if data and isinstance(data, dict) and data.get('status') == 'pong':
+                            _log("[auto] long instance ping successful, checking trading status...")
+                            # ping 成功，现在检查是否在交易
+                            try:
+                                status_resp = httpx.get(f"{long_url}/api/v1/status", auth=auth, timeout=5.0)
+                                if status_resp.status_code == 200 and status_resp.headers.get('content-type', '').startswith('application/json'):
+                                    status_data = status_resp.json()
+                                    _log(f"[auto] long instance status: {status_data}")
+                                    # 检查是否有交易数据或运行状态
+                                    if status_data and (isinstance(status_data, dict) and 
+                                        (status_data.get('state') == 'running' or 
+                                         'trades' in status_data or 
+                                         'profit' in status_data)):
+                                        long_running = True
+                                        _log("[auto] long instance is running: detected trading activity")
+                                    else:
+                                        long_running = False
+                                        _log("[auto] long instance not running: no trading activity detected")
+                                else:
+                                    long_running = False
+                                    _log("[auto] long instance not running: status endpoint failed")
+                            except Exception as status_e:
+                                long_running = False
+                                _log(f"[auto] long instance not running: status check failed: {status_e}")
                         else:
                             long_running = False
-                            _log("[auto] long instance not running: ping endpoint did not return valid status")
+                            _log("[auto] long instance not running: ping endpoint failed")
                     else:
                         # 如果不是 JSON，检查响应内容
                         content = resp.text
@@ -185,12 +206,33 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                     if resp.headers.get('content-type', '').startswith('application/json'):
                         data = resp.json()
                         _log(f"[auto] short instance ping response: {data}")
-                        if data and isinstance(data, dict) and data.get('status') in ['running', 'pong']:
-                            short_running = True
-                            _log("[auto] short instance is running: ping endpoint returned valid status")
+                        if data and isinstance(data, dict) and data.get('status') == 'pong':
+                            _log("[auto] short instance ping successful, checking trading status...")
+                            # ping 成功，现在检查是否在交易
+                            try:
+                                status_resp = httpx.get(f"{short_url}/api/v1/status", auth=auth, timeout=5.0)
+                                if status_resp.status_code == 200 and status_resp.headers.get('content-type', '').startswith('application/json'):
+                                    status_data = status_resp.json()
+                                    _log(f"[auto] short instance status: {status_data}")
+                                    # 检查是否有交易数据或运行状态
+                                    if status_data and (isinstance(status_data, dict) and 
+                                        (status_data.get('state') == 'running' or 
+                                         'trades' in status_data or 
+                                         'profit' in status_data)):
+                                        short_running = True
+                                        _log("[auto] short instance is running: detected trading activity")
+                                    else:
+                                        short_running = False
+                                        _log("[auto] short instance not running: no trading activity detected")
+                                else:
+                                    short_running = False
+                                    _log("[auto] short instance not running: status endpoint failed")
+                            except Exception as status_e:
+                                short_running = False
+                                _log(f"[auto] short instance not running: status check failed: {status_e}")
                         else:
                             short_running = False
-                            _log("[auto] short instance not running: ping endpoint did not return valid status")
+                            _log("[auto] short instance not running: ping endpoint failed")
                     else:
                         # 如果不是 JSON，尝试 /health 端点（需要认证）
                         try:
