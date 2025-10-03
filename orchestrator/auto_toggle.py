@@ -99,25 +99,41 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
         if long_url and long_user and long_pass:
             try:
                 auth = (long_user, long_pass)
+                _log(f"[auto] checking long instance: {long_url}")
                 resp = httpx.get(f"{long_url}/api/v1/status", auth=auth, timeout=10.0)
+                _log(f"[auto] long instance response: status={resp.status_code}, content-type={resp.headers.get('content-type')}")
                 if resp.status_code == 200:
                     data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else None
+                    _log(f"[auto] long instance data: {type(data)} - {data}")
                     if data and isinstance(data, (list, dict)):
                         long_running = True
+                        _log(f"[auto] long instance is running")
+                else:
+                    _log(f"[auto] long instance not running: status={resp.status_code}")
             except Exception as e:
                 _log(f"[auto] check long instance failed: {e}")
+        else:
+            _log(f"[auto] long instance config missing: url={long_url}, user={long_user}, pass={'***' if long_pass else None}")
         
         # 检查空实例状态
         if short_url and short_user and short_pass:
             try:
                 auth = (short_user, short_pass)
+                _log(f"[auto] checking short instance: {short_url}")
                 resp = httpx.get(f"{short_url}/api/v1/status", auth=auth, timeout=10.0)
+                _log(f"[auto] short instance response: status={resp.status_code}, content-type={resp.headers.get('content-type')}")
                 if resp.status_code == 200:
                     data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else None
+                    _log(f"[auto] short instance data: {type(data)} - {data}")
                     if data and isinstance(data, (list, dict)):
                         short_running = True
+                        _log(f"[auto] short instance is running")
+                else:
+                    _log(f"[auto] short instance not running: status={resp.status_code}")
             except Exception as e:
                 _log(f"[auto] check short instance failed: {e}")
+        else:
+            _log(f"[auto] short instance config missing: url={short_url}, user={short_user}, pass={'***' if short_pass else None}")
         
         return long_running, short_running
     except Exception as e:
@@ -237,6 +253,11 @@ def _auto_toggle_loop(
             
             if baseline is None:
                 # 初始化基准和方向
+                if pnl_value is None:
+                    _log("[auto] pnl_value is None, cannot initialize baseline")
+                    time.sleep(interval_sec)
+                    continue
+                    
                 _write_baseline(pnl_value)
                 _write_peak(pnl_value)
                 
@@ -328,7 +349,10 @@ def _auto_toggle_loop(
                     # 做空数据变得不那么负（做空亏损减少），利好做空
                     direction = 'short'
             
-            _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} peak={peak:.2f if peak is not None else 'None'} direction={current_direction} new_direction={direction}")
+            if pnl_value is not None and baseline is not None:
+                _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} peak={peak:.2f if peak is not None else 'None'} direction={current_direction} new_direction={direction}")
+            else:
+                _log(f"[auto] pnl={pnl_value} baseline={baseline} peak={peak} direction={current_direction} new_direction={direction}")
 
             if direction:
                 if direction == 'long':
