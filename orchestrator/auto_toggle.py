@@ -100,41 +100,38 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
             try:
                 auth = (long_user, long_pass)
                 _log(f"[auto] checking long instance: {long_url}")
-                resp = httpx.get(f"{long_url}/api/v1/status", auth=auth, timeout=10.0)
+                # 首先尝试 /ping 端点（无需认证）
+                resp = httpx.get(f"{long_url}/api/v1/ping", timeout=10.0)
                 _log(f"[auto] long instance response: status={resp.status_code}, content-type={resp.headers.get('content-type')}")
                 if resp.status_code == 200:
                     # 检查是否是 JSON 响应
                     if resp.headers.get('content-type', '').startswith('application/json'):
                         data = resp.json()
-                        _log(f"[auto] long instance data: {type(data)} - {data}")
-                        if data and isinstance(data, (list, dict)):
+                        _log(f"[auto] long instance ping response: {data}")
+                        if data and isinstance(data, dict) and data.get('status') == 'running':
                             long_running = True
-                            _log("[auto] long instance is running")
-                    else:
-                        # 如果不是 JSON，检查响应内容是否包含运行状态信息
-                        content = resp.text
-                        _log(f"[auto] long instance HTML response (first 200 chars): {content[:200]}")
-                        # 检查 HTML 内容是否包含 Freqtrade 相关信息
-                        content_lower = content.lower()
-                        if any(keyword in content_lower for keyword in ['freqtrade', 'trading', 'bot', 'strategy', 'portfolio', 'dashboard']):
-                            long_running = True
-                            _log("[auto] long instance is running: detected trading-related content in HTML response")
+                            _log("[auto] long instance is running: ping endpoint returned running status")
                         else:
-                            # 尝试其他端点来检测实例状态
-                            try:
-                                _log("[auto] trying alternative endpoint for long instance detection")
-                                alt_resp = httpx.get(f"{long_url}/api/v1/version", auth=auth, timeout=5.0)
-                                if alt_resp.status_code == 200 and alt_resp.headers.get('content-type', '').startswith('application/json'):
-                                    long_running = True
-                                    _log("[auto] long instance is running: detected via version endpoint")
-                                else:
-                                    long_running = False
-                                    _log("[auto] long instance not running: version endpoint also failed")
-                            except Exception as alt_e:
+                            long_running = False
+                            _log("[auto] long instance not running: ping endpoint did not return running status")
+                    else:
+                        # 如果不是 JSON，尝试 /health 端点（需要认证）
+                        try:
+                            _log("[auto] trying /health endpoint for long instance")
+                            health_resp = httpx.get(f"{long_url}/api/v1/health", auth=auth, timeout=5.0)
+                            if health_resp.status_code == 200 and health_resp.headers.get('content-type', '').startswith('application/json'):
+                                health_data = health_resp.json()
+                                _log(f"[auto] long instance health response: {health_data}")
+                                long_running = True
+                                _log("[auto] long instance is running: health endpoint successful")
+                            else:
                                 long_running = False
-                                _log(f"[auto] long instance not running: alternative detection failed: {alt_e}")
+                                _log("[auto] long instance not running: health endpoint failed")
+                        except Exception as health_e:
+                            long_running = False
+                            _log(f"[auto] long instance not running: health endpoint error: {health_e}")
                 else:
-                    _log(f"[auto] long instance not running: status={resp.status_code}")
+                    _log(f"[auto] long instance not running: ping status={resp.status_code}")
             except Exception as e:
                 _log(f"[auto] check long instance failed: {e}")
         else:
@@ -145,41 +142,38 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
             try:
                 auth = (short_user, short_pass)
                 _log(f"[auto] checking short instance: {short_url}")
-                resp = httpx.get(f"{short_url}/api/v1/status", auth=auth, timeout=10.0)
+                # 首先尝试 /ping 端点（无需认证）
+                resp = httpx.get(f"{short_url}/api/v1/ping", timeout=10.0)
                 _log(f"[auto] short instance response: status={resp.status_code}, content-type={resp.headers.get('content-type')}")
                 if resp.status_code == 200:
                     # 检查是否是 JSON 响应
                     if resp.headers.get('content-type', '').startswith('application/json'):
                         data = resp.json()
-                        _log(f"[auto] short instance data: {type(data)} - {data}")
-                        if data and isinstance(data, (list, dict)):
+                        _log(f"[auto] short instance ping response: {data}")
+                        if data and isinstance(data, dict) and data.get('status') == 'running':
                             short_running = True
-                            _log("[auto] short instance is running")
-                    else:
-                        # 如果不是 JSON，检查响应内容是否包含运行状态信息
-                        content = resp.text
-                        _log(f"[auto] short instance HTML response (first 200 chars): {content[:200]}")
-                        # 检查 HTML 内容是否包含 Freqtrade 相关信息
-                        content_lower = content.lower()
-                        if any(keyword in content_lower for keyword in ['freqtrade', 'trading', 'bot', 'strategy', 'portfolio', 'dashboard']):
-                            short_running = True
-                            _log("[auto] short instance is running: detected trading-related content in HTML response")
+                            _log("[auto] short instance is running: ping endpoint returned running status")
                         else:
-                            # 尝试其他端点来检测实例状态
-                            try:
-                                _log("[auto] trying alternative endpoint for short instance detection")
-                                alt_resp = httpx.get(f"{short_url}/api/v1/version", auth=auth, timeout=5.0)
-                                if alt_resp.status_code == 200 and alt_resp.headers.get('content-type', '').startswith('application/json'):
-                                    short_running = True
-                                    _log("[auto] short instance is running: detected via version endpoint")
-                                else:
-                                    short_running = False
-                                    _log("[auto] short instance not running: version endpoint also failed")
-                            except Exception as alt_e:
+                            short_running = False
+                            _log("[auto] short instance not running: ping endpoint did not return running status")
+                    else:
+                        # 如果不是 JSON，尝试 /health 端点（需要认证）
+                        try:
+                            _log("[auto] trying /health endpoint for short instance")
+                            health_resp = httpx.get(f"{short_url}/api/v1/health", auth=auth, timeout=5.0)
+                            if health_resp.status_code == 200 and health_resp.headers.get('content-type', '').startswith('application/json'):
+                                health_data = health_resp.json()
+                                _log(f"[auto] short instance health response: {health_data}")
+                                short_running = True
+                                _log("[auto] short instance is running: health endpoint successful")
+                            else:
                                 short_running = False
-                                _log(f"[auto] short instance not running: alternative detection failed: {alt_e}")
+                                _log("[auto] short instance not running: health endpoint failed")
+                        except Exception as health_e:
+                            short_running = False
+                            _log(f"[auto] short instance not running: health endpoint error: {health_e}")
                 else:
-                    _log(f"[auto] short instance not running: status={resp.status_code}")
+                    _log(f"[auto] short instance not running: ping status={resp.status_code}")
             except Exception as e:
                 _log(f"[auto] check short instance failed: {e}")
         else:
