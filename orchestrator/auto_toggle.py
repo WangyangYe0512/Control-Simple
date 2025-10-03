@@ -78,6 +78,52 @@ def _write_direction(direction: str):
         print(f"写入方向失败: {e}")
 
 
+def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bool, bool]:
+    """检查当前多空实例状态"""
+    try:
+        cfg = get_config() or {}
+        ft = cfg.get('freqtrade', {})
+        
+        # 检查多空实例状态
+        long_url = ft.get('long', {}).get('base_url', '')
+        short_url = ft.get('short', {}).get('base_url', '')
+        long_user = ft.get('long', {}).get('user', '')
+        long_pass = ft.get('long', {}).get('pass', '')
+        short_user = ft.get('short', {}).get('user', '')
+        short_pass = ft.get('short', {}).get('pass', '')
+        
+        long_running = False
+        short_running = False
+        
+        # 检查多实例状态
+        if long_url and long_user and long_pass:
+            try:
+                auth = (long_user, long_pass)
+                resp = httpx.get(f"{long_url}/api/v1/status", auth=auth, timeout=10.0)
+                if resp.status_code == 200:
+                    data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else None
+                    if data and isinstance(data, (list, dict)):
+                        long_running = True
+            except Exception as e:
+                _log(f"[auto] check long instance failed: {e}")
+        
+        # 检查空实例状态
+        if short_url and short_user and short_pass:
+            try:
+                auth = (short_user, short_pass)
+                resp = httpx.get(f"{short_url}/api/v1/status", auth=auth, timeout=10.0)
+                if resp.status_code == 200:
+                    data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else None
+                    if data and isinstance(data, (list, dict)):
+                        short_running = True
+            except Exception as e:
+                _log(f"[auto] check short instance failed: {e}")
+        
+        return long_running, short_running
+    except Exception as e:
+        _log(f"[auto] check instance status error: {e}")
+        return False, False
+
 def _auto_toggle_loop(
     get_config: Callable[[], Dict[str, Any]],
     start_long: Callable[[], None],
@@ -86,6 +132,16 @@ def _auto_toggle_loop(
     stop_short: Callable[[], None],
 ):
     _log("[auto] background thread started")
+    
+    # 检查初始状态
+    long_running, short_running = _check_instance_status(get_config)
+    _log(f"[auto] initial status - long: {long_running}, short: {short_running}")
+    
+    # 如果两边都开启或都关闭，需要手动处理
+    if long_running and short_running:
+        _log("[auto] WARNING: both instances running, this is unexpected")
+    elif not long_running and not short_running:
+        _log("[auto] both instances stopped, will wait for first trigger")
     while True:
         try:
             cfg = get_config() or {}
@@ -180,10 +236,21 @@ def _auto_toggle_loop(
             peak = _read_peak()
             
             if baseline is None:
+                # 初始化基准和方向
                 _write_baseline(pnl_value)
                 _write_peak(pnl_value)
-                _write_direction('none')
-                _log(f"[auto] init baseline -> {pnl_value:.2f}, peak -> {pnl_value:.2f}")
+                
+                # 根据当前实例状态设置初始方向
+                if long_running and not short_running:
+                    _write_direction('long')
+                    _log(f"[auto] init baseline -> {pnl_value:.2f}, peak -> {pnl_value:.2f}, direction=long (detected running)")
+                elif short_running and not long_running:
+                    _write_direction('short')
+                    _log(f"[auto] init baseline -> {pnl_value:.2f}, peak -> {pnl_value:.2f}, direction=short (detected running)")
+                else:
+                    _write_direction('none')
+                    _log(f"[auto] init baseline -> {pnl_value:.2f}, peak -> {pnl_value:.2f}, direction=none (no running instances)")
+                
                 time.sleep(interval_sec)
                 continue
 
