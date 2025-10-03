@@ -115,12 +115,24 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                         content = resp.text
                         _log(f"[auto] long instance HTML response (first 200 chars): {content[:200]}")
                         # 检查 HTML 内容是否包含 Freqtrade 相关信息
-                        if 'freqtrade' in content.lower() or 'trading' in content.lower():
+                        content_lower = content.lower()
+                        if any(keyword in content_lower for keyword in ['freqtrade', 'trading', 'bot', 'strategy', 'portfolio', 'dashboard']):
                             long_running = True
-                            _log("[auto] long instance is running: detected Freqtrade in HTML response")
+                            _log("[auto] long instance is running: detected trading-related content in HTML response")
                         else:
-                            long_running = False
-                            _log("[auto] long instance not running: returned HTML without Freqtrade indicators")
+                            # 尝试其他端点来检测实例状态
+                            try:
+                                _log("[auto] trying alternative endpoint for long instance detection")
+                                alt_resp = httpx.get(f"{long_url}/api/v1/version", auth=auth, timeout=5.0)
+                                if alt_resp.status_code == 200 and alt_resp.headers.get('content-type', '').startswith('application/json'):
+                                    long_running = True
+                                    _log("[auto] long instance is running: detected via version endpoint")
+                                else:
+                                    long_running = False
+                                    _log("[auto] long instance not running: version endpoint also failed")
+                            except Exception as alt_e:
+                                long_running = False
+                                _log(f"[auto] long instance not running: alternative detection failed: {alt_e}")
                 else:
                     _log(f"[auto] long instance not running: status={resp.status_code}")
             except Exception as e:
@@ -148,12 +160,24 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                         content = resp.text
                         _log(f"[auto] short instance HTML response (first 200 chars): {content[:200]}")
                         # 检查 HTML 内容是否包含 Freqtrade 相关信息
-                        if 'freqtrade' in content.lower() or 'trading' in content.lower():
+                        content_lower = content.lower()
+                        if any(keyword in content_lower for keyword in ['freqtrade', 'trading', 'bot', 'strategy', 'portfolio', 'dashboard']):
                             short_running = True
-                            _log("[auto] short instance is running: detected Freqtrade in HTML response")
+                            _log("[auto] short instance is running: detected trading-related content in HTML response")
                         else:
-                            short_running = False
-                            _log("[auto] short instance not running: returned HTML without Freqtrade indicators")
+                            # 尝试其他端点来检测实例状态
+                            try:
+                                _log("[auto] trying alternative endpoint for short instance detection")
+                                alt_resp = httpx.get(f"{short_url}/api/v1/version", auth=auth, timeout=5.0)
+                                if alt_resp.status_code == 200 and alt_resp.headers.get('content-type', '').startswith('application/json'):
+                                    short_running = True
+                                    _log("[auto] short instance is running: detected via version endpoint")
+                                else:
+                                    short_running = False
+                                    _log("[auto] short instance not running: version endpoint also failed")
+                            except Exception as alt_e:
+                                short_running = False
+                                _log(f"[auto] short instance not running: alternative detection failed: {alt_e}")
                 else:
                     _log(f"[auto] short instance not running: status={resp.status_code}")
             except Exception as e:
