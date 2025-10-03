@@ -254,14 +254,16 @@ def _auto_toggle_loop(
                 time.sleep(interval_sec)
                 continue
 
-            # 检查是否需要更新最高点
+            # 检查是否需要更新最高点（基于做空数据逻辑）
             if current_direction and current_direction != 'none':
-                # 如果当前有方向，检查是否继续向有利方向移动
-                if current_direction == 'long' and pnl_value > baseline:
-                    # 做多方向，PnL 继续增长，更新最高点
-                    if peak is None or pnl_value > peak:
+                # 基于做空数据的逻辑：
+                # - 做多方向：当基准（做空数据）变得更负时，表示做空盈利增加，利好做多
+                # - 做空方向：当基准（做空数据）变得不那么负时，表示做空亏损减少，利好做空
+                if current_direction == 'long' and pnl_value < baseline:
+                    # 做多方向，做空数据变得更负（做空盈利增加），更新最高点
+                    if peak is None or pnl_value < peak:
                         _write_peak(pnl_value)
-                        _log(f"[auto] update peak -> {pnl_value:.2f} (long direction)")
+                        _log(f"[auto] update peak -> {pnl_value:.2f} (long direction, short data more negative)")
                         # 发送最高点更新通知
                         try:
                             tg = cfg.get('telegram', {})
@@ -269,7 +271,7 @@ def _auto_toggle_loop(
                             chat_id = tg.get('chat_id')
                             topic_id = tg.get('topic_id')
                             if token and chat_id:
-                                text = f"📈 最高点更新 (做多方向)\n📊 新最高点: `{pnl_value:.2f}`"
+                                text = f"📈 最高点更新 (做多方向)\n📊 做空数据: `{pnl_value:.2f}` (更负，做空盈利增加)"
                                 api_url = f"https://api.telegram.org/bot{token}/sendMessage"
                                 payload = {
                                     'chat_id': chat_id,
@@ -281,11 +283,11 @@ def _auto_toggle_loop(
                                 httpx.post(api_url, json=payload, timeout=10.0)
                         except Exception as e:
                             _log(f"[auto] peak update telegram error: {e}")
-                elif current_direction == 'short' and pnl_value < baseline:
-                    # 做空方向，PnL 继续下降，更新最高点（做空的最高点是最低值）
-                    if peak is None or pnl_value < peak:
+                elif current_direction == 'short' and pnl_value > baseline:
+                    # 做空方向，做空数据变得不那么负（做空亏损减少），更新最高点
+                    if peak is None or pnl_value > peak:
                         _write_peak(pnl_value)
-                        _log(f"[auto] update peak -> {pnl_value:.2f} (short direction)")
+                        _log(f"[auto] update peak -> {pnl_value:.2f} (short direction, short data less negative)")
                         # 发送最高点更新通知
                         try:
                             tg = cfg.get('telegram', {})
@@ -293,7 +295,7 @@ def _auto_toggle_loop(
                             chat_id = tg.get('chat_id')
                             topic_id = tg.get('topic_id')
                             if token and chat_id:
-                                text = f"📉 最高点更新 (做空方向)\n📊 新最高点: `{pnl_value:.2f}`"
+                                text = f"📉 最高点更新 (做空方向)\n📊 做空数据: `{pnl_value:.2f}` (不那么负，做空亏损减少)"
                                 api_url = f"https://api.telegram.org/bot{token}/sendMessage"
                                 payload = {
                                     'chat_id': chat_id,
@@ -306,20 +308,24 @@ def _auto_toggle_loop(
                         except Exception as e:
                             _log(f"[auto] peak update telegram error: {e}")
 
-            # 检查是否需要反向切换
+            # 检查是否需要反向切换（基于做空数据逻辑）
             direction = None
             if current_direction and current_direction != 'none' and peak is not None:
-                # 从最高点回调 500 才反向
-                if current_direction == 'long' and pnl_value <= peak - 500:
-                    direction = 'short'  # 做多回调，切换到做空
-                elif current_direction == 'short' and pnl_value >= peak + 500:
-                    direction = 'long'  # 做空回调，切换到做多
+                # 基于做空数据的回调逻辑：
+                # - 做多方向：从最负点回调 500（做空数据变得不那么负），切换到做空
+                # - 做空方向：从最不负点回调 500（做空数据变得更负），切换到做多
+                if current_direction == 'long' and pnl_value >= peak + 500:
+                    direction = 'short'  # 做多回调：做空数据从最负点回调500，切换到做空
+                elif current_direction == 'short' and pnl_value <= peak - 500:
+                    direction = 'long'  # 做空回调：做空数据从最不负点回调500，切换到做多
             else:
-                # 初始触发条件（没有方向或最高点时）
+                # 初始触发条件（基于做空数据逻辑）
                 delta = pnl_value - baseline
                 if delta <= -threshold:
+                    # 做空数据变得更负（做空盈利增加），利好做多
                     direction = 'long'
                 elif delta >= threshold:
+                    # 做空数据变得不那么负（做空亏损减少），利好做空
                     direction = 'short'
             
             _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} peak={peak:.2f if peak else 'None'} direction={current_direction} new_direction={direction}")
@@ -355,13 +361,25 @@ def _auto_toggle_loop(
                     chat_id = tg.get('chat_id')
                     topic_id = tg.get('topic_id')
                     if token and chat_id:
-                        text = (
-                            f"⚙️ 自动切换触发\n"
-                            f"📐 基准: `{baseline:.2f}` → `{pnl_value:.2f}` (Δ {delta:+.2f})\n"
-                            f"🧭 开启方向: {'🚀 做多' if direction=='long' else '🔴 做空'}\n"
-                            f"🔵 多实例: {'启动' if direction=='long' else '停止'}\n"
-                            f"🔴 空实例: {'停止' if direction=='long' else '启动'}"
-                        )
+                        # 基于做空数据的播报逻辑
+                        if direction == 'long':
+                            text = (
+                                f"⚙️ 自动切换触发\n"
+                                f"📐 做空数据: `{baseline:.2f}` → `{pnl_value:.2f}` (Δ {delta:+.2f})\n"
+                                f"📊 做空数据变得更负，做空盈利增加 → 利好做多\n"
+                                f"🧭 开启方向: 🚀 做多\n"
+                                f"🔵 多实例: 启动\n"
+                                f"🔴 空实例: 停止"
+                            )
+                        else:
+                            text = (
+                                f"⚙️ 自动切换触发\n"
+                                f"📐 做空数据: `{baseline:.2f}` → `{pnl_value:.2f}` (Δ {delta:+.2f})\n"
+                                f"📊 做空数据变得不那么负，做空亏损减少 → 利好做空\n"
+                                f"🧭 开启方向: 🔴 做空\n"
+                                f"🔵 多实例: 停止\n"
+                                f"🔴 空实例: 启动"
+                            )
                         api_url = f"https://api.telegram.org/bot{token}/sendMessage"
                         payload = {
                             'chat_id': chat_id,
