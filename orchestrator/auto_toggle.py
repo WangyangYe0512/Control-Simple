@@ -378,7 +378,8 @@ def _auto_toggle_loop(
                         direction = 'short'
             
             if pnl_value is not None and baseline is not None:
-                _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} peak={peak:.2f if peak is not None else 'None'} direction={current_direction} new_direction={direction}")
+                peak_str = f"{peak:.2f}" if peak is not None else "None"
+                _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} peak={peak_str} direction={current_direction} new_direction={direction}")
             else:
                 _log(f"[auto] pnl={pnl_value} baseline={baseline} peak={peak} direction={current_direction} new_direction={direction}")
 
