@@ -109,12 +109,12 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                     if resp.headers.get('content-type', '').startswith('application/json'):
                         data = resp.json()
                         _log(f"[auto] long instance ping response: {data}")
-                        if data and isinstance(data, dict) and data.get('status') == 'running':
+                        if data and isinstance(data, dict) and data.get('status') in ['running', 'pong']:
                             long_running = True
-                            _log("[auto] long instance is running: ping endpoint returned running status")
+                            _log("[auto] long instance is running: ping endpoint returned valid status")
                         else:
                             long_running = False
-                            _log("[auto] long instance not running: ping endpoint did not return running status")
+                            _log("[auto] long instance not running: ping endpoint did not return valid status")
                     else:
                         # 如果不是 JSON，检查响应内容
                         content = resp.text
@@ -185,12 +185,12 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                     if resp.headers.get('content-type', '').startswith('application/json'):
                         data = resp.json()
                         _log(f"[auto] short instance ping response: {data}")
-                        if data and isinstance(data, dict) and data.get('status') == 'running':
+                        if data and isinstance(data, dict) and data.get('status') in ['running', 'pong']:
                             short_running = True
-                            _log("[auto] short instance is running: ping endpoint returned running status")
+                            _log("[auto] short instance is running: ping endpoint returned valid status")
                         else:
                             short_running = False
-                            _log("[auto] short instance not running: ping endpoint did not return running status")
+                            _log("[auto] short instance not running: ping endpoint did not return valid status")
                     else:
                         # 如果不是 JSON，尝试 /health 端点（需要认证）
                         try:
