@@ -328,7 +328,7 @@ def _auto_toggle_loop(
                     # 做空数据变得不那么负（做空亏损减少），利好做空
                     direction = 'short'
             
-            _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} peak={peak:.2f if peak else 'None'} direction={current_direction} new_direction={direction}")
+            _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} peak={peak:.2f if peak is not None else 'None'} direction={current_direction} new_direction={direction}")
 
             if direction:
                 if direction == 'long':
@@ -362,6 +362,7 @@ def _auto_toggle_loop(
                     topic_id = tg.get('topic_id')
                     if token and chat_id:
                         # 基于做空数据的播报逻辑
+                        delta = pnl_value - baseline
                         if direction == 'long':
                             text = (
                                 f"⚙️ 自动切换触发\n"
