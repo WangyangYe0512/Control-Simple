@@ -114,9 +114,13 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                         # 如果不是 JSON，检查响应内容是否包含运行状态信息
                         content = resp.text
                         _log(f"[auto] long instance HTML response (first 200 chars): {content[:200]}")
-                        # 如果返回 HTML，说明 Freqtrade 可能没有运行或需要登录
-                        long_running = False
-                        _log("[auto] long instance not running: returned HTML instead of JSON")
+                        # 检查 HTML 内容是否包含 Freqtrade 相关信息
+                        if 'freqtrade' in content.lower() or 'trading' in content.lower():
+                            long_running = True
+                            _log("[auto] long instance is running: detected Freqtrade in HTML response")
+                        else:
+                            long_running = False
+                            _log("[auto] long instance not running: returned HTML without Freqtrade indicators")
                 else:
                     _log(f"[auto] long instance not running: status={resp.status_code}")
             except Exception as e:
@@ -143,9 +147,13 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                         # 如果不是 JSON，检查响应内容是否包含运行状态信息
                         content = resp.text
                         _log(f"[auto] short instance HTML response (first 200 chars): {content[:200]}")
-                        # 如果返回 HTML，说明 Freqtrade 可能没有运行或需要登录
-                        short_running = False
-                        _log("[auto] short instance not running: returned HTML instead of JSON")
+                        # 检查 HTML 内容是否包含 Freqtrade 相关信息
+                        if 'freqtrade' in content.lower() or 'trading' in content.lower():
+                            short_running = True
+                            _log("[auto] short instance is running: detected Freqtrade in HTML response")
+                        else:
+                            short_running = False
+                            _log("[auto] short instance not running: returned HTML without Freqtrade indicators")
                 else:
                     _log(f"[auto] short instance not running: status={resp.status_code}")
             except Exception as e:
@@ -260,8 +268,9 @@ def _auto_toggle_loop(
 
             try:
                 pnl_value = float(pnl)
-            except Exception:
-                _log(f"[auto] pnl not numeric: {pnl}")
+                _log(f"[auto] pnl_value parsed: {pnl_value}")
+            except Exception as e:
+                _log(f"[auto] pnl not numeric: {pnl}, error: {e}")
                 time.sleep(interval_sec)
                 continue
 
