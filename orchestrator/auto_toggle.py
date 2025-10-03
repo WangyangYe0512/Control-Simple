@@ -7,6 +7,8 @@ from datetime import datetime
 
 # Baseline state persisted locally
 BASELINE_FILE = os.path.join('runtime', 'auto_baseline.txt')
+PEAK_FILE = os.path.join('runtime', 'auto_peak.txt')
+CURRENT_DIRECTION_FILE = os.path.join('runtime', 'auto_direction.txt')
 
 def _log(message: str):
     ts = datetime.now().isoformat(timespec='seconds')
@@ -40,6 +42,40 @@ def _write_baseline(value: float):
             f.write(str(value))
     except Exception as e:
         print(f"写入基准失败: {e}")
+
+def _read_peak() -> Optional[float]:
+    try:
+        if not os.path.exists(PEAK_FILE):
+            return None
+        with open(PEAK_FILE, 'r', encoding='utf-8') as f:
+            return float(f.read().strip())
+    except Exception:
+        return None
+
+def _write_peak(value: float):
+    try:
+        os.makedirs('runtime', exist_ok=True)
+        with open(PEAK_FILE, 'w', encoding='utf-8') as f:
+            f.write(str(value))
+    except Exception as e:
+        print(f"写入最高点失败: {e}")
+
+def _read_direction() -> Optional[str]:
+    try:
+        if not os.path.exists(CURRENT_DIRECTION_FILE):
+            return None
+        with open(CURRENT_DIRECTION_FILE, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
+def _write_direction(direction: str):
+    try:
+        os.makedirs('runtime', exist_ok=True)
+        with open(CURRENT_DIRECTION_FILE, 'w', encoding='utf-8') as f:
+            f.write(direction)
+    except Exception as e:
+        print(f"写入方向失败: {e}")
 
 
 def _auto_toggle_loop(
@@ -140,21 +176,86 @@ def _auto_toggle_loop(
                 continue
 
             baseline = _read_baseline()
+            current_direction = _read_direction()
+            peak = _read_peak()
+            
             if baseline is None:
                 _write_baseline(pnl_value)
-                _log(f"[auto] init baseline -> {pnl_value:.2f}")
+                _write_peak(pnl_value)
+                _write_direction('none')
+                _log(f"[auto] init baseline -> {pnl_value:.2f}, peak -> {pnl_value:.2f}")
                 time.sleep(interval_sec)
                 continue
 
-            delta = pnl_value - baseline
-            _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} delta={delta:+.2f} thr={threshold:.2f}")
+            # 检查是否需要更新最高点
+            if current_direction and current_direction != 'none':
+                # 如果当前有方向，检查是否继续向有利方向移动
+                if current_direction == 'long' and pnl_value > baseline:
+                    # 做多方向，PnL 继续增长，更新最高点
+                    if peak is None or pnl_value > peak:
+                        _write_peak(pnl_value)
+                        _log(f"[auto] update peak -> {pnl_value:.2f} (long direction)")
+                        # 发送最高点更新通知
+                        try:
+                            tg = cfg.get('telegram', {})
+                            token = tg.get('token')
+                            chat_id = tg.get('chat_id')
+                            topic_id = tg.get('topic_id')
+                            if token and chat_id:
+                                text = f"📈 最高点更新 (做多方向)\n📊 新最高点: `{pnl_value:.2f}`"
+                                api_url = f"https://api.telegram.org/bot{token}/sendMessage"
+                                payload = {
+                                    'chat_id': chat_id,
+                                    'text': text,
+                                    'parse_mode': 'Markdown',
+                                }
+                                if topic_id is not None:
+                                    payload['message_thread_id'] = topic_id
+                                httpx.post(api_url, json=payload, timeout=10.0)
+                        except Exception as e:
+                            _log(f"[auto] peak update telegram error: {e}")
+                elif current_direction == 'short' and pnl_value < baseline:
+                    # 做空方向，PnL 继续下降，更新最高点（做空的最高点是最低值）
+                    if peak is None or pnl_value < peak:
+                        _write_peak(pnl_value)
+                        _log(f"[auto] update peak -> {pnl_value:.2f} (short direction)")
+                        # 发送最高点更新通知
+                        try:
+                            tg = cfg.get('telegram', {})
+                            token = tg.get('token')
+                            chat_id = tg.get('chat_id')
+                            topic_id = tg.get('topic_id')
+                            if token and chat_id:
+                                text = f"📉 最高点更新 (做空方向)\n📊 新最高点: `{pnl_value:.2f}`"
+                                api_url = f"https://api.telegram.org/bot{token}/sendMessage"
+                                payload = {
+                                    'chat_id': chat_id,
+                                    'text': text,
+                                    'parse_mode': 'Markdown',
+                                }
+                                if topic_id is not None:
+                                    payload['message_thread_id'] = topic_id
+                                httpx.post(api_url, json=payload, timeout=10.0)
+                        except Exception as e:
+                            _log(f"[auto] peak update telegram error: {e}")
 
-            # 触发条件
+            # 检查是否需要反向切换
             direction = None
-            if delta <= -threshold:
-                direction = 'long'
-            elif delta >= threshold:
-                direction = 'short'
+            if current_direction and current_direction != 'none' and peak is not None:
+                # 从最高点回调 500 才反向
+                if current_direction == 'long' and pnl_value <= peak - 500:
+                    direction = 'short'  # 做多回调，切换到做空
+                elif current_direction == 'short' and pnl_value >= peak + 500:
+                    direction = 'long'  # 做空回调，切换到做多
+            else:
+                # 初始触发条件（没有方向或最高点时）
+                delta = pnl_value - baseline
+                if delta <= -threshold:
+                    direction = 'long'
+                elif delta >= threshold:
+                    direction = 'short'
+            
+            _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} peak={peak:.2f if peak else 'None'} direction={current_direction} new_direction={direction}")
 
             if direction:
                 if direction == 'long':
@@ -207,7 +308,10 @@ def _auto_toggle_loop(
                 except Exception as e:
                     _log(f"[auto] telegram error: {e}")
 
+                # 更新基准和方向
                 _write_baseline(pnl_value)
+                _write_direction(direction)
+                _write_peak(pnl_value)  # 新方向的新最高点
                 _log(f"[auto] update baseline -> {pnl_value:.2f} (direction={direction})")
 
             time.sleep(interval_sec)
