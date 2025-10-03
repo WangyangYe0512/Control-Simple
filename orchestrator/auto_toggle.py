@@ -103,11 +103,20 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                 resp = httpx.get(f"{long_url}/api/v1/status", auth=auth, timeout=10.0)
                 _log(f"[auto] long instance response: status={resp.status_code}, content-type={resp.headers.get('content-type')}")
                 if resp.status_code == 200:
-                    data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else None
-                    _log(f"[auto] long instance data: {type(data)} - {data}")
-                    if data and isinstance(data, (list, dict)):
-                        long_running = True
-                        _log(f"[auto] long instance is running")
+                    # 检查是否是 JSON 响应
+                    if resp.headers.get('content-type', '').startswith('application/json'):
+                        data = resp.json()
+                        _log(f"[auto] long instance data: {type(data)} - {data}")
+                        if data and isinstance(data, (list, dict)):
+                            long_running = True
+                            _log("[auto] long instance is running")
+                    else:
+                        # 如果不是 JSON，检查响应内容是否包含运行状态信息
+                        content = resp.text
+                        _log(f"[auto] long instance HTML response (first 200 chars): {content[:200]}")
+                        # 如果返回 HTML，说明 Freqtrade 可能没有运行或需要登录
+                        long_running = False
+                        _log("[auto] long instance not running: returned HTML instead of JSON")
                 else:
                     _log(f"[auto] long instance not running: status={resp.status_code}")
             except Exception as e:
@@ -123,11 +132,20 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                 resp = httpx.get(f"{short_url}/api/v1/status", auth=auth, timeout=10.0)
                 _log(f"[auto] short instance response: status={resp.status_code}, content-type={resp.headers.get('content-type')}")
                 if resp.status_code == 200:
-                    data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else None
-                    _log(f"[auto] short instance data: {type(data)} - {data}")
-                    if data and isinstance(data, (list, dict)):
-                        short_running = True
-                        _log(f"[auto] short instance is running")
+                    # 检查是否是 JSON 响应
+                    if resp.headers.get('content-type', '').startswith('application/json'):
+                        data = resp.json()
+                        _log(f"[auto] short instance data: {type(data)} - {data}")
+                        if data and isinstance(data, (list, dict)):
+                            short_running = True
+                            _log("[auto] short instance is running")
+                    else:
+                        # 如果不是 JSON，检查响应内容是否包含运行状态信息
+                        content = resp.text
+                        _log(f"[auto] short instance HTML response (first 200 chars): {content[:200]}")
+                        # 如果返回 HTML，说明 Freqtrade 可能没有运行或需要登录
+                        short_running = False
+                        _log("[auto] short instance not running: returned HTML instead of JSON")
                 else:
                     _log(f"[auto] short instance not running: status={resp.status_code}")
             except Exception as e:
