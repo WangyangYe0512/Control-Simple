@@ -454,7 +454,9 @@ def _auto_toggle_loop(
 
             time.sleep(interval_sec)
         except Exception as e:
+            import traceback
             _log(f"[auto] loop error: {e}")
+            _log(f"[auto] loop error traceback: {traceback.format_exc()}")
             time.sleep(30)
 
 
