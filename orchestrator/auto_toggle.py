@@ -115,10 +115,15 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                             long_running = False
                             _log("[auto] long instance not running: ping endpoint did not return running status")
                     else:
-                        # 如果不是 JSON，尝试 /health 端点（需要认证）
+                        # 如果不是 JSON，检查响应内容
+                        content = resp.text
+                        _log(f"[auto] long instance HTML response (first 200 chars): {content[:200]}")
+                        
+                        # 尝试 /health 端点（需要认证）
                         try:
                             _log("[auto] trying /health endpoint for long instance")
                             health_resp = httpx.get(f"{long_url}/api/v1/health", auth=auth, timeout=5.0)
+                            _log(f"[auto] long instance health response: status={health_resp.status_code}, content-type={health_resp.headers.get('content-type')}")
                             if health_resp.status_code == 200 and health_resp.headers.get('content-type', '').startswith('application/json'):
                                 health_data = health_resp.json()
                                 _log(f"[auto] long instance health response: {health_data}")
@@ -130,6 +135,19 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                         except Exception as health_e:
                             long_running = False
                             _log(f"[auto] long instance not running: health endpoint error: {health_e}")
+                        
+                        # 尝试其他可能的端点
+                        try:
+                            _log("[auto] trying /api/v1/status endpoint for long instance")
+                            status_resp = httpx.get(f"{long_url}/api/v1/status", auth=auth, timeout=5.0)
+                            _log(f"[auto] long instance status response: status={status_resp.status_code}, content-type={status_resp.headers.get('content-type')}")
+                            if status_resp.status_code == 200 and status_resp.headers.get('content-type', '').startswith('application/json'):
+                                status_data = status_resp.json()
+                                _log(f"[auto] long instance status response: {status_data}")
+                                long_running = True
+                                _log("[auto] long instance is running: status endpoint successful")
+                        except Exception as status_e:
+                            _log(f"[auto] long instance status endpoint error: {status_e}")
                 else:
                     _log(f"[auto] long instance not running: ping status={resp.status_code}")
             except Exception as e:
