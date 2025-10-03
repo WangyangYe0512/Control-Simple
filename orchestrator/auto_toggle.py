@@ -101,6 +101,7 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                 auth = (long_user, long_pass)
                 _log(f"[auto] checking long instance: {long_url}")
                 # 首先尝试 /ping 端点（无需认证）
+                _log(f"[auto] testing long instance API at: {long_url}/api/v1/ping")
                 resp = httpx.get(f"{long_url}/api/v1/ping", timeout=10.0)
                 _log(f"[auto] long instance response: status={resp.status_code}, content-type={resp.headers.get('content-type')}")
                 if resp.status_code == 200:
@@ -148,6 +149,22 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
                                 _log("[auto] long instance is running: status endpoint successful")
                         except Exception as status_e:
                             _log(f"[auto] long instance status endpoint error: {status_e}")
+                        
+                        # 尝试不同的端口和路径
+                        try:
+                            _log("[auto] trying alternative ports and paths for long instance")
+                            # 尝试不同的端口
+                            for port in [8080, 8081, 8082, 8084, 8085]:
+                                alt_url = f"http://18.143.200.143:{port}"
+                                _log(f"[auto] testing {alt_url}/api/v1/ping")
+                                alt_resp = httpx.get(f"{alt_url}/api/v1/ping", timeout=3.0)
+                                if alt_resp.status_code == 200 and alt_resp.headers.get('content-type', '').startswith('application/json'):
+                                    alt_data = alt_resp.json()
+                                    _log(f"[auto] found working API at {alt_url}: {alt_data}")
+                                    long_running = True
+                                    break
+                        except Exception as alt_e:
+                            _log(f"[auto] alternative port testing failed: {alt_e}")
                 else:
                     _log(f"[auto] long instance not running: ping status={resp.status_code}")
             except Exception as e:
