@@ -359,13 +359,14 @@ def _auto_toggle_loop(
                     direction = 'long'  # 做空回调：做空数据从最不负点回调500，切换到做多
             else:
                 # 初始触发条件（基于做空数据逻辑）
-                delta = pnl_value - baseline
-                if delta <= -threshold:
-                    # 做空数据变得更负（做空亏损增加），利好做多
-                    direction = 'long'
-                elif delta >= threshold:
-                    # 做空数据变得不那么负（做空亏损减少），利好做空
-                    direction = 'short'
+                if pnl_value is not None and baseline is not None:
+                    delta = pnl_value - baseline
+                    if delta <= -threshold:
+                        # 做空数据变得更负（做空亏损增加），利好做多
+                        direction = 'long'
+                    elif delta >= threshold:
+                        # 做空数据变得不那么负（做空亏损减少），利好做空
+                        direction = 'short'
             
             if pnl_value is not None and baseline is not None:
                 _log(f"[auto] pnl={pnl_value:.2f} baseline={baseline:.2f} peak={peak:.2f if peak is not None else 'None'} direction={current_direction} new_direction={direction}")
