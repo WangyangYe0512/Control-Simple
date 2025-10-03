@@ -219,7 +219,7 @@ def _auto_toggle_loop(
     if long_running and short_running:
         _log("[auto] WARNING: both instances running, this is unexpected")
     elif not long_running and not short_running:
-        _log("[auto] both instances stopped, will wait for first trigger")
+        _log("[auto] both instances stopped or API detection failed, will wait for first trigger")
     while True:
         try:
             cfg = get_config() or {}
