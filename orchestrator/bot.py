@@ -257,6 +257,50 @@ class FTClient:
     def stop_trading(self) -> Optional[Dict[Any, Any]]:
         """停止实例交易 (相当于 /stop)"""
         return self._request("POST", "/api/v1/stop")
+    
+    def close_all_positions(self) -> Dict[str, Any]:
+        """平仓所有持仓"""
+        result = {
+            'long_closed': [],
+            'short_closed': [],
+            'errors': []
+        }
+        
+        try:
+            positions = self.list_positions()
+            if not positions:
+                return result
+            
+            for trade in positions:
+                if not isinstance(trade, dict):
+                    continue
+                    
+                trade_id = trade.get("trade_id")
+                pair = trade.get("pair")
+                is_short = trade.get("is_short", False)
+                
+                if not trade_id or not pair:
+                    continue
+                
+                try:
+                    data = {"tradeid": trade_id}
+                    response = self._request("POST", "/api/v1/forceexit", json=data)
+                    
+                    if response:
+                        if is_short:
+                            result['short_closed'].append(f"{pair} (空仓)")
+                        else:
+                            result['long_closed'].append(f"{pair} (多仓)")
+                    else:
+                        result['errors'].append(f"平仓失败: {pair}")
+                        
+                except Exception as e:
+                    result['errors'].append(f"平仓 {pair} 时出错: {e}")
+                    
+        except Exception as e:
+            result['errors'].append(f"获取持仓列表失败: {e}")
+            
+        return result
 
 
 # 权限控制和武装机制
@@ -2056,6 +2100,8 @@ def run_telegram_bot():
         stop_long=lambda: long_client.stop_trading(),
         start_short=lambda: short_client.start_trading(),
         stop_short=lambda: short_client.stop_trading(),
+        close_long_positions=lambda: long_client.close_all_positions(),
+        close_short_positions=lambda: short_client.close_all_positions(),
     )
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)

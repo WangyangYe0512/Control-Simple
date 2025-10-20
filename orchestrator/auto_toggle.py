@@ -267,6 +267,8 @@ def _auto_toggle_loop(
     stop_long: Callable[[], None],
     start_short: Callable[[], None],
     stop_short: Callable[[], None],
+    close_long_positions: Callable[[], Dict[str, Any]],
+    close_short_positions: Callable[[], Dict[str, Any]],
 ):
     _log("[auto] background thread started")
     
@@ -479,6 +481,46 @@ def _auto_toggle_loop(
                 _log(f"[auto] pnl={pnl_value} baseline={baseline} peak={peak} direction={current_direction} new_direction={direction}")
 
             if direction:
+                # 反向转变时，先平仓原方向的所有持仓
+                if current_direction and current_direction != 'none':
+                    _log(f"[auto] 反向转变：从 {current_direction} 切换到 {direction}，开始平仓原方向持仓")
+                    
+                    if current_direction == 'long':
+                        # 原方向是做多，平仓所有多仓
+                        try:
+                            close_result = close_long_positions()
+                            _log(f"[auto] 平仓多仓结果: {close_result}")
+                            
+                            # 记录平仓结果
+                            long_closed = close_result.get('long_closed', [])
+                            errors = close_result.get('errors', [])
+                            
+                            if long_closed:
+                                _log(f"[auto] 成功平仓多仓: {', '.join(long_closed)}")
+                            if errors:
+                                _log(f"[auto] 平仓错误: {', '.join(errors)}")
+                                
+                        except Exception as e:
+                            _log(f"[auto] 平仓多仓失败: {e}")
+                    else:
+                        # 原方向是做空，平仓所有空仓
+                        try:
+                            close_result = close_short_positions()
+                            _log(f"[auto] 平仓空仓结果: {close_result}")
+                            
+                            # 记录平仓结果
+                            short_closed = close_result.get('short_closed', [])
+                            errors = close_result.get('errors', [])
+                            
+                            if short_closed:
+                                _log(f"[auto] 成功平仓空仓: {', '.join(short_closed)}")
+                            if errors:
+                                _log(f"[auto] 平仓错误: {', '.join(errors)}")
+                                
+                        except Exception as e:
+                            _log(f"[auto] 平仓空仓失败: {e}")
+                
+                # 然后切换实例
                 if direction == 'long':
                     try:
                         result = stop_short()
@@ -511,11 +553,20 @@ def _auto_toggle_loop(
                     if token and chat_id:
                         # 基于做空数据的播报逻辑
                         delta = pnl_value - baseline
+                        
+                        # 构建平仓信息
+                        close_info = ""
+                        if current_direction and current_direction != 'none':
+                            if current_direction == 'long':
+                                close_info = "\n🔴 已平仓所有多仓持仓"
+                            else:
+                                close_info = "\n🔴 已平仓所有空仓持仓"
+                        
                         if direction == 'long':
                             text = (
                                 f"⚙️ 自动切换触发\n"
                                 f"📐 做空数据: `{baseline:.2f}` → `{pnl_value:.2f}` (Δ {delta:+.2f})\n"
-                                f"📊 做空数据变得更负，做空亏损增加 → 利好做多\n"
+                                f"📊 做空数据变得更负，做空亏损增加 → 利好做多{close_info}\n"
                                 f"🧭 开启方向: 🚀 做多\n"
                                 f"🔵 多实例: 启动\n"
                                 f"🔴 空实例: 停止"
@@ -524,7 +575,7 @@ def _auto_toggle_loop(
                             text = (
                                 f"⚙️ 自动切换触发\n"
                                 f"📐 做空数据: `{baseline:.2f}` → `{pnl_value:.2f}` (Δ {delta:+.2f})\n"
-                                f"📊 做空数据变得不那么负，做空亏损减少 → 利好做空\n"
+                                f"📊 做空数据变得不那么负，做空亏损减少 → 利好做空{close_info}\n"
                                 f"🧭 开启方向: 🔴 做空\n"
                                 f"🔵 多实例: 停止\n"
                                 f"🔴 空实例: 启动"
@@ -563,11 +614,13 @@ def schedule_auto_toggle(
     stop_long: Callable[[], None],
     start_short: Callable[[], None],
     stop_short: Callable[[], None],
+    close_long_positions: Callable[[], Dict[str, Any]],
+    close_short_positions: Callable[[], Dict[str, Any]],
 ):
     # 使用守护线程运行同步轮询，完全独立于 PTB 的事件循环
     th = threading.Thread(
         target=_auto_toggle_loop,
-        args=(get_config, start_long, stop_long, start_short, stop_short),
+        args=(get_config, start_long, stop_long, start_short, stop_short, close_long_positions, close_short_positions),
         daemon=True,
     )
     th.start()
