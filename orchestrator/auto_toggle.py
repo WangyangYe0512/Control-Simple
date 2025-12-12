@@ -263,10 +263,10 @@ def _check_instance_status(get_config: Callable[[], Dict[str, Any]]) -> tuple[bo
 
 def _auto_toggle_loop(
     get_config: Callable[[], Dict[str, Any]],
-    start_long: Callable[[], None],
-    stop_long: Callable[[], None],
-    start_short: Callable[[], None],
-    stop_short: Callable[[], None],
+    start_long: Callable[[], Optional[Dict[str, Any]]],
+    stop_long: Callable[[], Optional[Dict[str, Any]]],
+    start_short: Callable[[], Optional[Dict[str, Any]]],
+    stop_short: Callable[[], Optional[Dict[str, Any]]],
     close_long_positions: Callable[[], Dict[str, Any]],
     close_short_positions: Callable[[], Dict[str, Any]],
 ):
@@ -491,14 +491,11 @@ def _auto_toggle_loop(
                             close_result = close_long_positions()
                             _log(f"[auto] 平仓多仓结果: {close_result}")
                             
-                            # 记录平仓结果
-                            long_closed = close_result.get('long_closed', [])
-                            errors = close_result.get('errors', [])
-                            
-                            if long_closed:
-                                _log(f"[auto] 成功平仓多仓: {', '.join(long_closed)}")
-                            if errors:
-                                _log(f"[auto] 平仓错误: {', '.join(errors)}")
+                            # 记录平仓结果（使用新的返回值格式）
+                            if 'error' in close_result:
+                                _log(f"[auto] 平仓多仓错误: {close_result.get('error')}")
+                            else:
+                                _log(f"[auto] 平仓多仓成功: {close_result}")
                                 
                         except Exception as e:
                             _log(f"[auto] 平仓多仓失败: {e}")
@@ -508,14 +505,11 @@ def _auto_toggle_loop(
                             close_result = close_short_positions()
                             _log(f"[auto] 平仓空仓结果: {close_result}")
                             
-                            # 记录平仓结果
-                            short_closed = close_result.get('short_closed', [])
-                            errors = close_result.get('errors', [])
-                            
-                            if short_closed:
-                                _log(f"[auto] 成功平仓空仓: {', '.join(short_closed)}")
-                            if errors:
-                                _log(f"[auto] 平仓错误: {', '.join(errors)}")
+                            # 记录平仓结果（使用新的返回值格式）
+                            if 'error' in close_result:
+                                _log(f"[auto] 平仓空仓错误: {close_result.get('error')}")
+                            else:
+                                _log(f"[auto] 平仓空仓成功: {close_result}")
                                 
                         except Exception as e:
                             _log(f"[auto] 平仓空仓失败: {e}")
@@ -610,10 +604,10 @@ def _auto_toggle_loop(
 def schedule_auto_toggle(
     application,
     get_config: Callable[[], Dict[str, Any]],
-    start_long: Callable[[], None],
-    stop_long: Callable[[], None],
-    start_short: Callable[[], None],
-    stop_short: Callable[[], None],
+    start_long: Callable[[], Optional[Dict[str, Any]]],
+    stop_long: Callable[[], Optional[Dict[str, Any]]],
+    start_short: Callable[[], Optional[Dict[str, Any]]],
+    stop_short: Callable[[], Optional[Dict[str, Any]]],
     close_long_positions: Callable[[], Dict[str, Any]],
     close_short_positions: Callable[[], Dict[str, Any]],
 ):
