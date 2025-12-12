@@ -258,6 +258,10 @@ class FTClient:
         """停止实例交易 (相当于 /stop)"""
         return self._request("POST", "/api/v1/stop")
     
+    def pause_trading(self) -> Optional[Dict[Any, Any]]:
+        """暂停实例交易 (相当于 /pause) - 优雅处理持仓，不开新仓"""
+        return self._request("POST", "/api/v1/pause")
+    
     def close_all_positions(self) -> Dict[str, Any]:
         """平掉该实例的所有持仓（使用 tradeid=all 的内置接口）"""
         try:
@@ -2061,9 +2065,9 @@ def run_telegram_bot():
         application,
         get_config=load_config,
         start_long=lambda: long_client.start_trading(),
-        stop_long=lambda: long_client.stop_trading(),
+        stop_long=lambda: long_client.pause_trading(),  # 使用 pause 更优雅，不会开新仓
         start_short=lambda: short_client.start_trading(),
-        stop_short=lambda: short_client.stop_trading(),
+        stop_short=lambda: short_client.pause_trading(),  # 使用 pause 更优雅，不会开新仓
         close_long_positions=lambda: long_client.close_all_positions(),
         close_short_positions=lambda: short_client.close_all_positions(),
     )
